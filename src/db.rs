@@ -23,6 +23,7 @@ pub struct SpiNorDef {
     pub erase_size: u32,
     pub addr_bytes: u8,
     pub voltage: ChipVoltage,
+    pub quad: bool,
 }
 
 pub fn load() -> Result<&'static Vec<SpiNorDef>> {

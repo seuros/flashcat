@@ -63,6 +63,9 @@ enum Cmd {
         offset: u32,
         #[arg(long, value_parser = parse_hex_or_dec)]
         length: Option<u32>,
+        /// Use Quad SPI (4-bit) read path (chip must support quad mode)
+        #[arg(long)]
+        quad: bool,
     },
 
     /// Write file to flash (no erase — use erase first)
@@ -113,8 +116,8 @@ async fn main() -> Result<()> {
     match &cli.cmd {
         Cmd::Check => cmd::cmd_check().await,
         Cmd::Detect => cmd::cmd_detect(voltage, speed).await,
-        Cmd::Read { file, offset, length } => {
-            cmd::cmd_read(voltage, speed, file.clone(), *offset, *length).await
+        Cmd::Read { file, offset, length, quad } => {
+            cmd::cmd_read(voltage, speed, file.clone(), *offset, *length, *quad).await
         }
         Cmd::Write { file, offset, verify } => {
             cmd::cmd_write(voltage, speed, file.clone(), *offset, *verify).await

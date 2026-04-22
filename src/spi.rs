@@ -6,11 +6,13 @@ use crate::usb::{UsbDevice, UsbReq};
 mod bus;
 mod detect;
 mod erase;
+mod quad;
 mod read;
 mod write;
 
 pub use detect::{detect, rdid};
 pub use erase::erase_chip;
+pub use quad::{enable_quad, read_quad, sqi_setup};
 pub use read::read;
 pub use write::write;
 

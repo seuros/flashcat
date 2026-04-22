@@ -12,6 +12,14 @@ pub enum UsbReq {
     SpiWriteFlash = 0x47,
     SpiWriteDataAai = 0x48,
 
+    SqiSetup     = 0x50,
+    SqiSsEnable  = 0x51,
+    SqiSsDisable = 0x52,
+    SqiRdData    = 0x53,
+    SqiWrData    = 0x54,
+    SqiRdFlash   = 0x55,
+    SqiWrFlash   = 0x56,
+
     Version = 0x80,
     Echo = 0x81,
     LedOn = 0x82,
