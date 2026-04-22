@@ -1,0 +1,55 @@
+[
+    // EON
+    (name: "EN25QH128", mfr: 0x1C, id1: 0x70, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "EN25QH64",  mfr: 0x1C, id1: 0x70, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "EN25QH32",  mfr: 0x1C, id1: 0x70, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "EN25Q128",  mfr: 0x1C, id1: 0x30, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "EN25Q64",   mfr: 0x1C, id1: 0x30, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+
+    // Winbond
+    (name: "W25Q128JV", mfr: 0xEF, id1: 0x40, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "W25Q64JV",  mfr: 0xEF, id1: 0x40, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "W25Q32JV",  mfr: 0xEF, id1: 0x40, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "W25Q16JV",  mfr: 0xEF, id1: 0x40, id2: 0x15, size_bytes: 2097152,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "W25Q256JV", mfr: 0xEF, id1: 0x40, id2: 0x19, size_bytes: 33554432, page_size: 256, erase_size: 4096, addr_bytes: 4),
+    (name: "W25Q128BV", mfr: 0xEF, id1: 0x60, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "W25Q64BV",  mfr: 0xEF, id1: 0x60, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "W25Q32BV",  mfr: 0xEF, id1: 0x60, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+
+    // GigaDevice
+    (name: "GD25Q128C", mfr: 0xC8, id1: 0x40, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "GD25Q64C",  mfr: 0xC8, id1: 0x40, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "GD25Q32C",  mfr: 0xC8, id1: 0x40, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "GD25Q256D", mfr: 0xC8, id1: 0x40, id2: 0x19, size_bytes: 33554432, page_size: 256, erase_size: 4096, addr_bytes: 4),
+    (name: "GD25LQ128C",mfr: 0xC8, id1: 0x60, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+
+    // Macronix
+    (name: "MX25L128",  mfr: 0xC2, id1: 0x20, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "MX25L64",   mfr: 0xC2, id1: 0x20, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "MX25L32",   mfr: 0xC2, id1: 0x20, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "MX25L16",   mfr: 0xC2, id1: 0x20, id2: 0x15, size_bytes: 2097152,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "MX25L8005", mfr: 0xC2, id1: 0x20, id2: 0x14, size_bytes: 1048576,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "MX25L256",  mfr: 0xC2, id1: 0x20, id2: 0x19, size_bytes: 33554432, page_size: 256, erase_size: 4096, addr_bytes: 4),
+
+    // Micron/Numonyx
+    (name: "N25Q128A",  mfr: 0x20, id1: 0xBA, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "N25Q064A",  mfr: 0x20, id1: 0xBA, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "N25Q032A",  mfr: 0x20, id1: 0xBA, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "MT25QL128",  mfr: 0x20, id1: 0xBA, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "MT25QL256",  mfr: 0x20, id1: 0xBA, id2: 0x19, size_bytes: 33554432, page_size: 256, erase_size: 4096, addr_bytes: 4),
+
+    // Spansion/Cypress
+    (name: "S25FL128S",  mfr: 0x01, id1: 0x20, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "S25FL064L",  mfr: 0x01, id1: 0x60, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "S25FL032P",  mfr: 0x01, id1: 0x02, id2: 0x15, size_bytes: 4194304,  page_size: 256, erase_size: 65536, addr_bytes: 3),
+    (name: "S25FL256S",  mfr: 0x01, id1: 0x02, id2: 0x19, size_bytes: 33554432, page_size: 256, erase_size: 4096, addr_bytes: 4),
+
+    // ISSI
+    (name: "IS25LP128",  mfr: 0x9D, id1: 0x60, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "IS25LP064",  mfr: 0x9D, id1: 0x60, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "IS25LP032",  mfr: 0x9D, id1: 0x60, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+
+    // SST/Microchip
+    (name: "SST25VF128B",mfr: 0xBF, id1: 0x25, id2: 0x4B, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3),
+    (name: "SST25VF064C",mfr: 0xBF, id1: 0x25, id2: 0x4B, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3),
+]

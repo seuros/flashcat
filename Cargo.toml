@@ -1,0 +1,22 @@
+[package]
+name = "flashcat"
+version = "0.1.0"
+edition = "2024"
+description = "FlashcatUSB Pro host tool — Linux/FreeBSD/macOS"
+license = "MIT"
+
+[[bin]]
+name = "flashcat"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive"] }
+nusb = { version = "0.2.3", features = ["tokio"] }
+ratatui = "0.30.0"
+ron = "0.12.1"
+serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "0.11.0"
+tokio = { version = "1.52.1", features = ["full"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
