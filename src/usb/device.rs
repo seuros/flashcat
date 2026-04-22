@@ -7,6 +7,7 @@ use std::time::Duration;
 use tracing::debug;
 
 use super::requests::UsbReq;
+use crate::programmer::Programmer;
 
 const TIMEOUT: Duration = Duration::from_millis(5000);
 const USB_DELAY: Duration = Duration::from_millis(25);
@@ -17,17 +18,25 @@ const EP_BULK_OUT: u8 = 0x02;
 
 pub struct UsbDevice {
     pub iface: Interface,
-    pub has_logic: bool,
+    pub kind: Programmer,
 }
 
 impl UsbDevice {
+    fn recipient(&self) -> Recipient {
+        if self.kind.uses_interface_recipient() {
+            Recipient::Interface
+        } else {
+            Recipient::Device
+        }
+    }
+
     pub async fn ctrl_out(&self, req: UsbReq, data: u32, buf: Option<&[u8]>) -> Result<()> {
         let payload = buf.unwrap_or(&[]).to_vec();
         self.iface
             .control_out(
                 ControlOut {
                     control_type: ControlType::Vendor,
-                    recipient: Recipient::Device,
+                    recipient: self.recipient(),
                     request: req as u8,
                     value: ((data >> 16) & 0xFFFF) as u16,
                     index: (data & 0xFFFF) as u16,
@@ -48,7 +57,7 @@ impl UsbDevice {
             .control_in(
                 ControlIn {
                     control_type: ControlType::Vendor,
-                    recipient: Recipient::Device,
+                    recipient: self.recipient(),
                     request: req as u8,
                     value: ((data >> 16) & 0xFFFF) as u16,
                     index: (data & 0xFFFF) as u16,

@@ -8,6 +8,7 @@ mod cmd;
 mod db;
 mod fpga;
 mod progress;
+mod programmer;
 mod spi;
 mod usb;
 
@@ -103,7 +104,8 @@ async fn main() -> Result<()> {
     let voltage = match cli.voltage.as_str() {
         "1v8" | "1.8" => Voltage::V1_8,
         "3v3" | "3.3" => Voltage::V3_3,
-        v => bail!("unknown voltage '{v}' — use 1v8 or 3v3"),
+        "5v" | "5.0"  => Voltage::V5_0,
+        v => bail!("unknown voltage '{v}' — use 1v8, 3v3, or 5v"),
     };
 
     let speed = SpiSpeed(cli.mhz);
@@ -126,6 +128,12 @@ async fn main() -> Result<()> {
 
 pub(crate) async fn setup(voltage: Voltage, speed: SpiSpeed) -> Result<usb::UsbDevice> {
     let dev = usb::connect().await?;
+    if !dev.kind.supports_voltage(voltage) {
+        bail!(
+            "{:?} does not support {:?} — supported: {:?}",
+            dev.kind, voltage, dev.kind.supported_voltages()
+        );
+    }
     fpga::load(&dev, voltage).await?;
     fpga::set_vcc(&dev, voltage).await?;
     spi::init(&dev, speed).await?;
