@@ -14,7 +14,7 @@ pub async fn cmd_write(
     verify: bool,
 ) -> Result<()> {
     let dev = setup(voltage, speed).await?;
-    let chip = spi::detect(&dev).await?.context("no chip detected")?;
+    let chip = spi::detect(&dev, voltage).await?.context("no chip detected")?;
     let data =
         std::fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
 

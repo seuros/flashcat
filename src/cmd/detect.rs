@@ -6,7 +6,7 @@ use crate::{spi, setup};
 
 pub async fn cmd_detect(voltage: Voltage, speed: SpiSpeed) -> Result<()> {
     let dev = setup(voltage, speed).await?;
-    match spi::detect(&dev).await? {
+    match spi::detect(&dev, voltage).await? {
         Some(chip) => {
             println!("Chip:      {}", chip.name);
             println!("Size:      {} MB ({} bytes)", chip.size_bytes / 1024 / 1024, chip.size_bytes);

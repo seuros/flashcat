@@ -14,7 +14,7 @@ pub async fn cmd_read(
     length: Option<u32>,
 ) -> Result<()> {
     let dev = setup(voltage, speed).await?;
-    let chip = spi::detect(&dev).await?.context("no chip detected")?;
+    let chip = spi::detect(&dev, voltage).await?.context("no chip detected")?;
 
     // validate range
     if offset >= chip.size_bytes {

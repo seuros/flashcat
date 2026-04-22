@@ -6,16 +6,23 @@ static DB: OnceLock<Vec<SpiNorDef>> = OnceLock::new();
 
 const DB_RON: &str = include_str!("../db/spi_nor.ron");
 
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub enum ChipVoltage {
+    V1_8,
+    V3_3,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SpiNorDef {
     pub name: String,
     pub mfr: u8,
     pub id1: u8,
     pub id2: u8,
-    pub size_bytes: u32, // in bytes
+    pub size_bytes: u32,
     pub page_size: u32,
     pub erase_size: u32,
     pub addr_bytes: u8,
+    pub voltage: ChipVoltage,
 }
 
 pub fn load() -> Result<&'static Vec<SpiNorDef>> {

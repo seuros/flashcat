@@ -16,7 +16,7 @@ pub async fn cmd_compare(
         std::fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
 
     let dev = crate::setup(voltage, speed).await?;
-    let chip = spi::detect(&dev).await?.context("no chip detected")?;
+    let chip = spi::detect(&dev, voltage).await?.context("no chip detected")?;
 
     if offset >= chip.size_bytes {
         anyhow::bail!("offset {offset:#x} exceeds chip size {:#x}", chip.size_bytes);
