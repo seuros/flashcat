@@ -9,7 +9,22 @@ use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
 
 pub async fn detect(dev: &UsbDevice, voltage: Voltage) -> Result<Option<&'static SpiNorDef>> {
     let id = rdid(dev).await?;
-    detect_from_id(id, voltage)
+    let chip = detect_from_id(id, voltage)?;
+    if let Some(c) = chip {
+        if c.addr_bytes == 4 {
+            enter_4byte_mode(dev).await?;
+        }
+    }
+    Ok(chip)
+}
+
+/// Send EN4B (0xB7) to switch the chip into 4-byte address mode.
+async fn enter_4byte_mode(dev: &UsbDevice) -> Result<()> {
+    info!("entering 4-byte address mode (EN4B)");
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0xB7]).await?;
+    ss_disable(dev).await?;
+    Ok(())
 }
 
 /// Pure lookup: given a raw RDID triple, validate voltage and return the chip entry.
