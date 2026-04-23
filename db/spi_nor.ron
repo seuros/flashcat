@@ -6,15 +6,20 @@
     (name: "EN25Q128",  mfr: 0x1C, id1: 0x30, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
     (name: "EN25Q64",   mfr: 0x1C, id1: 0x30, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
 
-    // Winbond — W25Q JV/BV = 3.3V; 1.8V variants use L suffix (not in this list)
+    // Winbond — id1=0x40: JV/BV series (3.3V); id1=0x60: FW series (1.8V)
     (name: "W25Q128JV", mfr: 0xEF, id1: 0x40, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
     (name: "W25Q64JV",  mfr: 0xEF, id1: 0x40, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
     (name: "W25Q32JV",  mfr: 0xEF, id1: 0x40, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
     (name: "W25Q16JV",  mfr: 0xEF, id1: 0x40, id2: 0x15, size_bytes: 2097152,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
     (name: "W25Q256JV", mfr: 0xEF, id1: 0x40, id2: 0x19, size_bytes: 33554432, page_size: 256, erase_size: 4096, addr_bytes: 4, voltage: V3_3, quad: true),
-    (name: "W25Q128BV", mfr: 0xEF, id1: 0x60, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
-    (name: "W25Q64BV",  mfr: 0xEF, id1: 0x60, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
-    (name: "W25Q32BV",  mfr: 0xEF, id1: 0x60, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
+    (name: "W25Q128BV", mfr: 0xEF, id1: 0x40, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
+    (name: "W25Q64BV",  mfr: 0xEF, id1: 0x40, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
+    (name: "W25Q32BV",  mfr: 0xEF, id1: 0x40, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
+    // Winbond FW series — 1.8V (id1=0x60)
+    (name: "W25Q256FW", mfr: 0xEF, id1: 0x60, id2: 0x19, size_bytes: 33554432, page_size: 256, erase_size: 4096, addr_bytes: 4, voltage: V1_8, quad: true),
+    (name: "W25Q128FW", mfr: 0xEF, id1: 0x60, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V1_8, quad: true),
+    (name: "W25Q64FW",  mfr: 0xEF, id1: 0x60, id2: 0x17, size_bytes: 8388608,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V1_8, quad: true),
+    (name: "W25Q32FW",  mfr: 0xEF, id1: 0x60, id2: 0x16, size_bytes: 4194304,  page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V1_8, quad: true),
 
     // GigaDevice — LQ = low voltage 1.8V; Q = 3.3V
     (name: "GD25Q128C",  mfr: 0xC8, id1: 0x40, id2: 0x18, size_bytes: 16777216, page_size: 256, erase_size: 4096, addr_bytes: 3, voltage: V3_3, quad: true),
