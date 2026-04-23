@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use tracing::info;
 
 use crate::fpga::Voltage;
@@ -22,7 +22,17 @@ pub async fn cmd_erase(
         }
         (off, len) => {
             let off = off.unwrap_or(0);
-            let len = len.unwrap_or(chip.size_bytes - off);
+            if off >= chip.size_bytes {
+                bail!("offset {off:#x} exceeds chip size {:#x}", chip.size_bytes);
+            }
+            let max_len = chip.size_bytes - off;
+            let len = match len {
+                Some(l) if l > max_len => {
+                    bail!("length {l:#x} exceeds available space {max_len:#x} at offset {off:#x}")
+                }
+                Some(l) => l,
+                None => max_len,
+            };
             info!("range erase: {off:#010x}..{:#010x}", off + len);
             spi::erase_range(&dev, chip, off, len).await?;
             println!("Erased {} bytes at {off:#010x}", len);
