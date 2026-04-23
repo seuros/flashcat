@@ -16,24 +16,13 @@ pub enum Voltage {
     V5_0, // Classic only
 }
 
-/// Cut the FPGA logic output (and thus target chip VCC), wait, let the chip discharge.
-pub async fn power_cycle(dev: &UsbDevice) -> Result<()> {
-    dev.ctrl_out(UsbReq::LogicOff, 0, None).await?;
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    Ok(())
-}
-
 pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     if !dev.kind.has_fpga() {
         return Ok(());
     }
 
-    // Cut VCC before reconfiguring so the target chip sees a clean power-on reset.
-    // LogicOff may not be supported on all firmware versions; ignore the error.
-    if let Err(e) = dev.ctrl_out(UsbReq::LogicOff, 0, None).await {
-        tracing::debug!("LogicOff not supported or failed ({e}), continuing");
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // Do NOT send LogicOff here — on fw 1.19 it resets the SSPI interface.
+    // VCC is controlled solely by Logic3v3/Logic1v8 sent below.
 
     let bitstream = match (dev.kind, voltage) {
         (Programmer::Pro5,  Voltage::V3_3) => BITSTREAM_PRO5_3V,

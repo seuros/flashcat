@@ -10,7 +10,7 @@ use super::requests::UsbReq;
 use crate::programmer::Programmer;
 
 const TIMEOUT: Duration = Duration::from_millis(5000);
-const USB_DELAY: Duration = Duration::from_millis(25);
+const USB_DELAY: Duration = Duration::from_millis(5); // matches official app USB_OUT_DELAY
 
 // EP1 IN = 0x81, EP2 OUT = 0x02
 const EP_BULK_IN: u8 = 0x81;
