@@ -52,6 +52,9 @@ enum Cmd {
     /// Check device connection and firmware version
     Check,
 
+    /// Watch for FlashcatUSB plug-in events and auto-detect chip
+    Watch,
+
     /// Detect and identify the attached SPI NOR chip
     Detect,
 
@@ -125,6 +128,7 @@ async fn main() -> Result<()> {
 
     match &cli.cmd {
         Cmd::Check => cmd::cmd_check().await,
+        Cmd::Watch => cmd::cmd_watch(voltage, speed).await,
         Cmd::Detect => cmd::cmd_detect(voltage, speed).await,
         Cmd::Read { file, offset, length, quad } => {
             cmd::cmd_read(voltage, speed, file.clone(), *offset, *length, *quad).await

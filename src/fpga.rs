@@ -16,12 +16,24 @@ pub enum Voltage {
     V5_0, // Classic only
 }
 
+/// Cut VCC to the chip socket. Safe to call after an operation completes.
+/// LogicOff resets the SSPI interface (fw 1.19 note), but load() always
+/// reinitialises SSPI before the next bitstream, so this is safe post-op.
+pub async fn vcc_off(dev: &UsbDevice) -> Result<()> {
+    if dev.kind.has_fpga() {
+        dev.ctrl_out(UsbReq::LogicOff, 0, None).await?;
+    } else {
+        dev.ctrl_out(UsbReq::VccOff, 0, None).await?;
+    }
+    Ok(())
+}
+
 pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     if !dev.kind.has_fpga() {
         return Ok(());
     }
 
-    // Do NOT send LogicOff here — on fw 1.19 it resets the SSPI interface.
+    // Do NOT send LogicOff before load — it resets SSPI (fw 1.19).
     // VCC is controlled solely by Logic3v3/Logic1v8 sent below.
 
     let bitstream = match (dev.kind, voltage) {
