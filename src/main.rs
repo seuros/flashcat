@@ -68,19 +68,29 @@ enum Cmd {
         quad: bool,
     },
 
-    /// Write file to flash (no erase — use erase first)
+    /// Write file to flash
     Write {
         #[arg(short, long)]
         file: PathBuf,
         #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
         offset: u32,
+        /// Erase affected sectors before writing
+        #[arg(long)]
+        erase: bool,
         /// Read back and verify after writing
         #[arg(long)]
         verify: bool,
     },
 
-    /// Erase entire chip
-    Erase,
+    /// Erase flash (chip by default; --offset + --length for sector range)
+    Erase {
+        /// Start address (default: 0 = chip erase)
+        #[arg(long, value_parser = parse_hex_or_dec)]
+        offset: Option<u32>,
+        /// Number of bytes to erase (rounded up to erase unit boundary)
+        #[arg(long, value_parser = parse_hex_or_dec)]
+        length: Option<u32>,
+    },
 
     /// Compare flash contents against a file (SHA-256 + diff report)
     Compare {
@@ -119,10 +129,10 @@ async fn main() -> Result<()> {
         Cmd::Read { file, offset, length, quad } => {
             cmd::cmd_read(voltage, speed, file.clone(), *offset, *length, *quad).await
         }
-        Cmd::Write { file, offset, verify } => {
-            cmd::cmd_write(voltage, speed, file.clone(), *offset, *verify).await
+        Cmd::Write { file, offset, erase, verify } => {
+            cmd::cmd_write(voltage, speed, file.clone(), *offset, *erase, *verify).await
         }
-        Cmd::Erase => cmd::cmd_erase(voltage, speed).await,
+        Cmd::Erase { offset, length } => cmd::cmd_erase(voltage, speed, *offset, *length).await,
         Cmd::Compare { file, offset, length } => {
             cmd::cmd_compare(voltage, speed, file.clone(), *offset, *length).await
         }

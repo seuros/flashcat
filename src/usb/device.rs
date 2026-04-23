@@ -31,6 +31,13 @@ impl UsbDevice {
     }
 
     pub async fn ctrl_out(&self, req: UsbReq, data: u32, buf: Option<&[u8]>) -> Result<()> {
+        self.ctrl_out_nodelay(req, data, buf).await?;
+        tokio::time::sleep(USB_DELAY).await;
+        Ok(())
+    }
+
+    /// ctrl_out without the trailing USB_DELAY — use when bulk_out follows immediately.
+    pub async fn ctrl_out_nodelay(&self, req: UsbReq, data: u32, buf: Option<&[u8]>) -> Result<()> {
         let payload = buf.unwrap_or(&[]).to_vec();
         self.iface
             .control_out(
@@ -46,7 +53,6 @@ impl UsbDevice {
             )
             .await
             .with_context(|| format!("ctrl_out {req:?} failed"))?;
-        tokio::time::sleep(USB_DELAY).await;
         debug!("ctrl_out {req:?} data={data:#010x} ok");
         Ok(())
     }

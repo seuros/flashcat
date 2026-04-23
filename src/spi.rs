@@ -10,8 +10,8 @@ mod quad;
 mod read;
 mod write;
 
-pub use detect::{detect, rdid};
-pub use erase::erase_chip;
+pub use detect::{detect, detect_from_id, rdid};
+pub use erase::{erase_chip, erase_range};
 pub use quad::{enable_quad, read_quad, sqi_setup};
 pub use read::read;
 pub use write::write;

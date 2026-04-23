@@ -9,6 +9,11 @@ use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
 
 pub async fn detect(dev: &UsbDevice, voltage: Voltage) -> Result<Option<&'static SpiNorDef>> {
     let id = rdid(dev).await?;
+    detect_from_id(id, voltage)
+}
+
+/// Pure lookup: given a raw RDID triple, validate voltage and return the chip entry.
+pub fn detect_from_id(id: [u8; 3], voltage: Voltage) -> Result<Option<&'static SpiNorDef>> {
     let (mfr, id1, id2) = (id[0], id[1], id[2]);
     info!("RDID: {mfr:#04x} {id1:#04x} {id2:#04x}");
 

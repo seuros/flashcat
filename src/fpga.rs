@@ -16,10 +16,24 @@ pub enum Voltage {
     V5_0, // Classic only
 }
 
+/// Cut the FPGA logic output (and thus target chip VCC), wait, let the chip discharge.
+pub async fn power_cycle(dev: &UsbDevice) -> Result<()> {
+    dev.ctrl_out(UsbReq::LogicOff, 0, None).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    Ok(())
+}
+
 pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     if !dev.kind.has_fpga() {
         return Ok(());
     }
+
+    // Cut VCC before reconfiguring so the target chip sees a clean power-on reset.
+    // LogicOff may not be supported on all firmware versions; ignore the error.
+    if let Err(e) = dev.ctrl_out(UsbReq::LogicOff, 0, None).await {
+        tracing::debug!("LogicOff not supported or failed ({e}), continuing");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     let bitstream = match (dev.kind, voltage) {
         (Programmer::Pro5,  Voltage::V3_3) => BITSTREAM_PRO5_3V,
@@ -71,7 +85,7 @@ pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
 }
 
 async fn sspi_write(dev: &UsbDevice, data: &[u8]) -> Result<()> {
-    dev.ctrl_out(UsbReq::SpiWrData, data.len() as u32, None).await?;
+    dev.ctrl_out_nodelay(UsbReq::SpiWrData, data.len() as u32, None).await?;
     dev.bulk_out(data.to_vec()).await?;
     tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     Ok(())

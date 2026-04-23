@@ -11,6 +11,7 @@ pub async fn cmd_write(
     speed: SpiSpeed,
     file: PathBuf,
     offset: u32,
+    erase: bool,
     verify: bool,
 ) -> Result<()> {
     let dev = setup(voltage, speed).await?;
@@ -27,6 +28,10 @@ pub async fn cmd_write(
             "file ({} bytes) exceeds available space ({available} bytes at offset {offset:#x})",
             data.len()
         );
+    }
+
+    if erase {
+        spi::erase_range(&dev, chip, offset, data.len() as u32).await?;
     }
 
     info!("writing {} bytes to {} at offset {offset:#010x}", data.len(), chip.name);

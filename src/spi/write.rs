@@ -28,9 +28,9 @@ pub async fn write(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, data: &[u8]) 
 }
 
 async fn write_page(dev: &UsbDevice, chip: &SpiNorDef, addr: u32, data: &[u8]) -> Result<()> {
-    // WriteSetupPacket (15 bytes) sent as ctrl_out payload, then bulk_out for data
+    // ctrl_out arms the firmware, bulk_out must follow without delay
     let setup = write_setup_packet(chip, addr, data.len() as u32);
-    dev.ctrl_out(UsbReq::SpiWriteFlash, 0, Some(&setup)).await?;
+    dev.ctrl_out_nodelay(UsbReq::SpiWriteFlash, 0, Some(&setup)).await?;
     dev.bulk_out(data.to_vec()).await?;
     wait_wip(dev).await
 }
@@ -77,6 +77,10 @@ async fn poll_wip(dev: &UsbDevice, max_polls: u32, interval_ms: u64) -> Result<(
 
 pub(crate) async fn wait_wip(dev: &UsbDevice) -> Result<()> {
     poll_wip(dev, 200, 10).await // 2s — page program / sector erase
+}
+
+pub(crate) async fn wait_wip_block(dev: &UsbDevice) -> Result<()> {
+    poll_wip(dev, 500, 10).await // 5s — 64KB block erase
 }
 
 pub(crate) async fn wait_wip_long(dev: &UsbDevice) -> Result<()> {
