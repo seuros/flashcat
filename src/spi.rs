@@ -42,8 +42,13 @@ impl SpiSpeed {
 }
 
 pub async fn init(dev: &UsbDevice, speed: SpiSpeed) -> Result<()> {
-    // (cs=1 << 24) | (mode=0 << 16) | speed
-    let w32: u32 = (1u32 << 24) | (0u32 << 16) | speed.0 as u32;
+    // Match the vendor host's normal SPI init path:
+    // USB_SPI_INIT((mode << 16) | speed_mhz)
+    //
+    // The high CS/select byte is used by the separate SSPI path for FPGA
+    // configuration, not by regular SPI-NOR access. Setting it here can route
+    // transactions to the wrong target and produce all-0x00 / no-detect reads.
+    let w32: u32 = speed.0 as u32;
     dev.ctrl_out(UsbReq::SpiInit, w32, None)
         .await
         .context("SPI_INIT failed")?;
