@@ -4,14 +4,16 @@ use std::time::Duration;
 use crate::usb::{UsbDevice, UsbReq};
 
 mod bus;
-mod detect;
+pub(crate) mod detect;
 mod erase;
+mod probe;
 mod quad;
 mod read;
 mod write;
 
-pub use detect::{detect, detect_from_id, rdid};
+pub use detect::detect;
 pub use erase::{erase_chip, erase_range};
+pub use probe::auto_probe;
 pub use quad::{enable_quad, read_quad, sqi_setup};
 pub use read::read;
 pub use write::write;

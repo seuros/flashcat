@@ -19,7 +19,7 @@ pub async fn detect(dev: &UsbDevice, voltage: Voltage) -> Result<Option<&'static
 }
 
 /// Send EN4B (0xB7) to switch the chip into 4-byte address mode.
-async fn enter_4byte_mode(dev: &UsbDevice) -> Result<()> {
+pub(crate) async fn enter_4byte_mode(dev: &UsbDevice) -> Result<()> {
     info!("entering 4-byte address mode (EN4B)");
     ss_enable(dev).await?;
     spibus_write(dev, &[0xB7]).await?;

@@ -1,12 +1,12 @@
 use tokio_stream::StreamExt;
 use nusb::hotplug::HotplugEvent;
 
-use crate::fpga::{vcc_off, Voltage};
+use crate::fpga::vcc_off;
 use crate::spi::SpiSpeed;
 use crate::usb::{PID_CLASSIC, PID_MACH1, PID_PRO, VID_EC};
-use crate::{setup, spi};
+use crate::{prepare, VoltageChoice};
 
-pub async fn cmd_watch(voltage: Voltage, speed: SpiSpeed) -> anyhow::Result<()> {
+pub async fn cmd_watch(vc: VoltageChoice, speed: SpiSpeed) -> anyhow::Result<()> {
     println!("Watching for FlashcatUSB — press Ctrl-C to stop");
 
     let mut stream = nusb::watch_devices()?;
@@ -22,25 +22,28 @@ pub async fn cmd_watch(voltage: Voltage, speed: SpiSpeed) -> anyhow::Result<()> 
 
         println!("\nFlashcatUSB connected (PID {:#06x})", di.product_id());
 
-        let dev = match setup(voltage, speed).await {
-            Ok(d) => d,
-            Err(e) => { eprintln!("setup failed: {e}"); continue }
+        // VoltageChoice is not Clone — rebuild from the same variant each iteration.
+        // watch is always called with Auto (the default); explicit variants are unlikely
+        // but still handled correctly since we reconstruct from the outer vc each time.
+        let iter_vc = match &vc {
+            VoltageChoice::Auto => VoltageChoice::Auto,
+            VoltageChoice::Explicit(v) => VoltageChoice::Explicit(*v),
         };
 
-        match spi::detect(&dev, voltage).await {
-            Ok(Some(chip)) => {
-                println!("Chip:  {}", chip.name);
-                println!("Size:  {} MB ({} bytes)", chip.size_bytes / 1024 / 1024, chip.size_bytes);
-                println!("Erase: {} bytes | Page: {} bytes | Addr: {}-byte",
+        match prepare(iter_vc, speed).await {
+            Ok((dev, chip, voltage)) => {
+                println!("Chip:    {}", chip.name);
+                println!("Size:    {} MB ({} bytes)", chip.size_bytes / 1024 / 1024, chip.size_bytes);
+                println!("Erase:   {} bytes | Page: {} bytes | Addr: {}-byte",
                     chip.erase_size, chip.page_size, chip.addr_bytes);
-            }
-            Ok(None) => println!("No chip detected"),
-            Err(e)   => eprintln!("detect failed: {e}"),
-        }
+                println!("Voltage: {:?}", voltage);
 
-        // Cut VCC so a different-voltage chip can be swapped safely
-        if let Err(e) = vcc_off(&dev).await {
-            tracing::debug!("vcc_off: {e}");
+                if let Err(e) = vcc_off(&dev).await {
+                    tracing::debug!("vcc_off: {e}");
+                }
+            }
+            Err(e) if e.to_string().contains("no chip detected") => println!("No chip detected"),
+            Err(e) => eprintln!("detect failed: {e}"),
         }
     }
 

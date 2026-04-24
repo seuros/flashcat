@@ -2,20 +2,18 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use tracing::info;
 
-use crate::fpga::Voltage;
 use crate::spi::SpiSpeed;
-use crate::{spi, setup};
+use crate::{prepare, spi, VoltageChoice};
 
 pub async fn cmd_read(
-    voltage: Voltage,
+    vc: VoltageChoice,
     speed: SpiSpeed,
     file: PathBuf,
     offset: u32,
     length: Option<u32>,
     quad: bool,
 ) -> Result<()> {
-    let dev = setup(voltage, speed).await?;
-    let chip = spi::detect(&dev, voltage).await?.context("no chip detected")?;
+    let (dev, chip, _voltage) = prepare(vc, speed).await?;
 
     if quad && !chip.quad {
         bail!("{} does not support Quad SPI reads", chip.name);

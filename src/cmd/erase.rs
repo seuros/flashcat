@@ -1,18 +1,16 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use tracing::info;
 
-use crate::fpga::Voltage;
 use crate::spi::SpiSpeed;
-use crate::{spi, setup};
+use crate::{prepare, spi, VoltageChoice};
 
 pub async fn cmd_erase(
-    voltage: Voltage,
+    vc: VoltageChoice,
     speed: SpiSpeed,
     offset: Option<u32>,
     length: Option<u32>,
 ) -> Result<()> {
-    let dev = setup(voltage, speed).await?;
-    let chip = spi::detect(&dev, voltage).await?.context("no chip detected")?;
+    let (dev, chip, _voltage) = prepare(vc, speed).await?;
 
     match (offset, length) {
         (None, None) => {

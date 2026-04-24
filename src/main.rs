@@ -15,6 +15,12 @@ mod usb;
 use fpga::Voltage;
 use spi::SpiSpeed;
 
+#[derive(Clone, Copy)]
+pub(crate) enum VoltageChoice {
+    Auto,
+    Explicit(Voltage),
+}
+
 fn parse_mhz(s: &str) -> Result<u8, String> {
     let mhz: u8 = s.parse().map_err(|_| format!("'{s}' is not a valid MHz value"))?;
     if SpiSpeed::ALL.contains(&SpiSpeed(mhz)) {
@@ -39,8 +45,8 @@ struct Cli {
     #[arg(long, default_value = "8", global = true, value_parser = parse_mhz)]
     mhz: u8,
 
-    /// Target voltage (1v8 or 3v3)
-    #[arg(long, default_value = "3v3", global = true)]
+    /// Target voltage: auto (default), 1v8, 3v3, or 5v
+    #[arg(long, default_value = "auto", global = true)]
     voltage: String,
 
     #[command(subcommand)]
@@ -117,28 +123,29 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let voltage = match cli.voltage.as_str() {
-        "1v8" | "1.8" => Voltage::V1_8,
-        "3v3" | "3.3" => Voltage::V3_3,
-        "5v" | "5.0"  => Voltage::V5_0,
-        v => bail!("unknown voltage '{v}' — use 1v8, 3v3, or 5v"),
+    let vc = match cli.voltage.as_str() {
+        "auto"        => VoltageChoice::Auto,
+        "1v8" | "1.8" => VoltageChoice::Explicit(Voltage::V1_8),
+        "3v3" | "3.3" => VoltageChoice::Explicit(Voltage::V3_3),
+        "5v"  | "5.0" => VoltageChoice::Explicit(Voltage::V5_0),
+        v => bail!("unknown voltage '{v}' — use auto, 1v8, 3v3, or 5v"),
     };
 
     let speed = SpiSpeed(cli.mhz);
 
     match &cli.cmd {
         Cmd::Check => cmd::cmd_check().await,
-        Cmd::Watch => cmd::cmd_watch(voltage, speed).await,
-        Cmd::Detect => cmd::cmd_detect(voltage, speed).await,
+        Cmd::Watch => cmd::cmd_watch(vc, speed).await,
+        Cmd::Detect => cmd::cmd_detect(vc, speed).await,
         Cmd::Read { file, offset, length, quad } => {
-            cmd::cmd_read(voltage, speed, file.clone(), *offset, *length, *quad).await
+            cmd::cmd_read(vc, speed, file.clone(), *offset, *length, *quad).await
         }
         Cmd::Write { file, offset, erase, verify } => {
-            cmd::cmd_write(voltage, speed, file.clone(), *offset, *erase, *verify).await
+            cmd::cmd_write(vc, speed, file.clone(), *offset, *erase, *verify).await
         }
-        Cmd::Erase { offset, length } => cmd::cmd_erase(voltage, speed, *offset, *length).await,
+        Cmd::Erase { offset, length } => cmd::cmd_erase(vc, speed, *offset, *length).await,
         Cmd::Compare { file, offset, length } => {
-            cmd::cmd_compare(voltage, speed, file.clone(), *offset, *length).await
+            cmd::cmd_compare(vc, speed, file.clone(), *offset, *length).await
         }
     }
 }
@@ -155,4 +162,25 @@ pub(crate) async fn setup(voltage: Voltage, speed: SpiSpeed) -> Result<usb::UsbD
     fpga::set_vcc(&dev, voltage).await?;
     spi::init(&dev, speed).await?;
     Ok(dev)
+}
+
+/// Unified prepare: resolve voltage (auto-probing if needed), return configured device + chip.
+pub(crate) async fn prepare(
+    vc: VoltageChoice,
+    speed: SpiSpeed,
+) -> Result<(usb::UsbDevice, &'static db::SpiNorDef, Voltage)> {
+    match vc {
+        VoltageChoice::Auto => {
+            let (dev, chip_opt, voltage) = spi::auto_probe(speed).await?;
+            let chip = chip_opt.ok_or_else(|| anyhow::anyhow!("no chip detected"))?;
+            Ok((dev, chip, voltage))
+        }
+        VoltageChoice::Explicit(voltage) => {
+            let dev = setup(voltage, speed).await?;
+            let chip = spi::detect(&dev, voltage)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no chip detected"))?;
+            Ok((dev, chip, voltage))
+        }
+    }
 }

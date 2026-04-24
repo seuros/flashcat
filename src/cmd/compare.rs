@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-use crate::fpga::Voltage;
 use crate::spi::{self, SpiSpeed};
+use crate::{prepare, VoltageChoice};
 
 pub async fn cmd_compare(
-    voltage: Voltage,
+    vc: VoltageChoice,
     speed: SpiSpeed,
     file: PathBuf,
     offset: u32,
@@ -15,8 +15,7 @@ pub async fn cmd_compare(
     let expected =
         std::fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
 
-    let dev = crate::setup(voltage, speed).await?;
-    let chip = spi::detect(&dev, voltage).await?.context("no chip detected")?;
+    let (dev, chip, _voltage) = prepare(vc, speed).await?;
 
     if offset >= chip.size_bytes {
         anyhow::bail!("offset {offset:#x} exceeds chip size {:#x}", chip.size_bytes);

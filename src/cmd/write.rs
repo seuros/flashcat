@@ -2,20 +2,18 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use tracing::info;
 
-use crate::fpga::Voltage;
 use crate::spi::SpiSpeed;
-use crate::{spi, setup};
+use crate::{prepare, spi, VoltageChoice};
 
 pub async fn cmd_write(
-    voltage: Voltage,
+    vc: VoltageChoice,
     speed: SpiSpeed,
     file: PathBuf,
     offset: u32,
     erase: bool,
     verify: bool,
 ) -> Result<()> {
-    let dev = setup(voltage, speed).await?;
-    let chip = spi::detect(&dev, voltage).await?.context("no chip detected")?;
+    let (dev, chip, _voltage) = prepare(vc, speed).await?;
     let data =
         std::fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
 
