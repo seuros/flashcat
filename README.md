@@ -47,6 +47,7 @@ flashcat compare -f dump.bin
 |------|---------|-------------|
 | `--mhz` | `8` | SPI clock: 1, 2, 4, 8, 12, 16, 24, 32 |
 | `--voltage` | `auto` | Target voltage: `auto`, `1v8`, `3v3`, or `5v` |
+| `--legacy-read` | off | Use Read (0x03) instead of Fast Read (0x0B) |
 
 `auto` probes at 1.8V first, escalates to 3.3V after a safe VCC drain if no 1.8V
 chip is found. Unknown RDID at 1.8V is a hard stop — use `--voltage 3v3` to override.

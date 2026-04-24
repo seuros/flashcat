@@ -9,7 +9,7 @@ use crate::usb::{UsbDevice, UsbReq};
 const BLOCK_SIZE: u32 = 65536;
 const READ_RETRIES: u32 = 3;
 
-pub async fn read(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, length: u32) -> Result<Vec<u8>> {
+pub async fn read(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, length: u32, legacy: bool) -> Result<Vec<u8>> {
     let mut pb = Progress::new("Reading", length as u64);
     let mut out = Vec::with_capacity(length as usize);
     let mut addr = offset;
@@ -17,7 +17,7 @@ pub async fn read(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, length: u32) -
 
     while addr < end {
         let block = BLOCK_SIZE.min(end - addr);
-        let data = read_block(dev, chip, addr, block).await?;
+        let data = read_block(dev, chip, addr, block, legacy).await?;
         out.extend_from_slice(&data);
         addr += block;
         pb.inc(block as u64);
@@ -27,9 +27,9 @@ pub async fn read(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, length: u32) -
     Ok(out)
 }
 
-async fn read_block(dev: &UsbDevice, chip: &SpiNorDef, addr: u32, len: u32) -> Result<Vec<u8>> {
+async fn read_block(dev: &UsbDevice, chip: &SpiNorDef, addr: u32, len: u32, legacy: bool) -> Result<Vec<u8>> {
     for attempt in 0..READ_RETRIES {
-        match try_read_block(dev, chip, addr, len).await {
+        match try_read_block(dev, chip, addr, len, legacy).await {
             Ok(data) => return Ok(data),
             Err(e) => {
                 warn!("read block {addr:#010x} attempt {attempt}: {e}");
@@ -45,10 +45,12 @@ pub(crate) async fn try_read_block(
     chip: &SpiNorDef,
     addr: u32,
     len: u32,
+    legacy: bool,
 ) -> Result<Vec<u8>> {
-    debug!("SPI_READFLASH addr={addr:#010x} len={len}");
+    let (cmd, dummy) = if legacy { (0x03u8, 0u8) } else { (0x0Bu8, 1u8) };
+    debug!("SPI_READFLASH cmd={cmd:#04x} addr={addr:#010x} len={len}");
     // ReadSetupPacket (11 bytes) sent as ctrl_out payload, then bulk_in for data
-    let setup = read_setup_packet(0x03, chip.addr_bytes, addr, len, 0);
+    let setup = read_setup_packet(cmd, chip.addr_bytes, addr, len, dummy);
     dev.ctrl_out(UsbReq::SpiReadFlash, 0, Some(&setup)).await?;
     let result = dev.bulk_in(len as usize).await?;
 

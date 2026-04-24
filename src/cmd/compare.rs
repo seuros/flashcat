@@ -37,7 +37,7 @@ pub async fn cmd_compare(
         );
     }
 
-    let flash = spi::read(&dev, chip, offset, len).await?;
+    let flash = spi::read(&dev, chip, offset, len, false).await?;
 
     let file_hash = hex(Sha256::digest(&expected));
     let flash_hash = hex(Sha256::digest(&flash));

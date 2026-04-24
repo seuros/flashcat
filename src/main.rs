@@ -75,6 +75,9 @@ enum Cmd {
         /// Use Quad SPI (4-bit) read path (chip must support quad mode)
         #[arg(long)]
         quad: bool,
+        /// Use legacy Read (0x03) instead of Fast Read (0x0B)
+        #[arg(long)]
+        legacy_read: bool,
     },
 
     /// Write file to flash
@@ -137,8 +140,8 @@ async fn main() -> Result<()> {
         Cmd::Check => cmd::cmd_check().await,
         Cmd::Watch => cmd::cmd_watch(vc, speed).await,
         Cmd::Detect => cmd::cmd_detect(vc, speed).await,
-        Cmd::Read { file, offset, length, quad } => {
-            cmd::cmd_read(vc, speed, file.clone(), *offset, *length, *quad).await
+        Cmd::Read { file, offset, length, quad, legacy_read } => {
+            cmd::cmd_read(vc, speed, file.clone(), *offset, *length, *quad, *legacy_read).await
         }
         Cmd::Write { file, offset, erase, verify } => {
             cmd::cmd_write(vc, speed, file.clone(), *offset, *erase, *verify).await

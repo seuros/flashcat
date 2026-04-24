@@ -38,7 +38,7 @@ pub async fn cmd_write(
 
     if verify {
         info!("verifying...");
-        let readback = spi::read(&dev, chip, offset, data.len() as u32).await?;
+        let readback = spi::read(&dev, chip, offset, data.len() as u32, false).await?;
         if readback != data {
             let diffs = data.iter().zip(readback.iter()).filter(|(a, b)| a != b).count();
             bail!("verify failed — {diffs} bytes differ");
