@@ -42,9 +42,9 @@ pub async fn cmd_read(
         info!("quad SPI mode: enabling QE bit and using SqiRdFlash");
         spi::enable_quad(&dev).await?;
         spi::sqi_setup(&dev, speed.0).await?;
-        spi::read_quad(&dev, chip, offset, len).await?
+        spi::read_quad(&dev, &chip, offset, len).await?
     } else {
-        spi::read(&dev, chip, offset, len, legacy_read).await?
+        spi::read(&dev, &chip, offset, len, legacy_read).await?
     };
 
     std::fs::write(&file, &data).with_context(|| format!("failed to write {}", file.display()))?;

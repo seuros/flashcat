@@ -34,7 +34,17 @@ pub fn load() -> Result<&'static Vec<SpiNorDef>> {
     Ok(DB.get_or_init(|| parsed))
 }
 
-pub fn lookup(mfr: u8, id1: u8, id2: u8) -> Result<Option<&'static SpiNorDef>> {
+/// Return all DB entries matching the given RDID triple.
+/// Multiple matches indicate ambiguous RDIDs (e.g. same ID used by 1.8V and 3.3V variants).
+pub fn lookup(mfr: u8, id1: u8, id2: u8) -> Result<Vec<&'static SpiNorDef>> {
+    let db = load()?;
+    Ok(db.iter().filter(|d| d.mfr == mfr && d.id1 == id1 && d.id2 == id2).collect())
+}
+
+/// Convenience wrapper: returns the first match only.
+/// Use `lookup()` when ambiguous RDIDs need full resolution.
+#[allow(dead_code)]
+pub fn lookup_one(mfr: u8, id1: u8, id2: u8) -> Result<Option<&'static SpiNorDef>> {
     let db = load()?;
     Ok(db.iter().find(|d| d.mfr == mfr && d.id1 == id1 && d.id2 == id2))
 }

@@ -2,14 +2,14 @@ use anyhow::{bail, Result};
 use std::time::Duration;
 use tracing::{debug, warn};
 
-use crate::db::SpiNorDef;
+use crate::chip::ResolvedChip;
 use crate::progress::Progress;
 use crate::usb::{UsbDevice, UsbReq};
 
 const BLOCK_SIZE: u32 = 65536;
 const READ_RETRIES: u32 = 3;
 
-pub async fn read(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, length: u32, legacy: bool) -> Result<Vec<u8>> {
+pub async fn read(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, length: u32, legacy: bool) -> Result<Vec<u8>> {
     let mut pb = Progress::new("Reading", length as u64);
     let mut out = Vec::with_capacity(length as usize);
     let mut addr = offset;
@@ -27,7 +27,7 @@ pub async fn read(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, length: u32, l
     Ok(out)
 }
 
-async fn read_block(dev: &UsbDevice, chip: &SpiNorDef, addr: u32, len: u32, legacy: bool) -> Result<Vec<u8>> {
+async fn read_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32, len: u32, legacy: bool) -> Result<Vec<u8>> {
     for attempt in 0..READ_RETRIES {
         match try_read_block(dev, chip, addr, len, legacy).await {
             Ok(data) => return Ok(data),
@@ -42,7 +42,7 @@ async fn read_block(dev: &UsbDevice, chip: &SpiNorDef, addr: u32, len: u32, lega
 
 pub(crate) async fn try_read_block(
     dev: &UsbDevice,
-    chip: &SpiNorDef,
+    chip: &ResolvedChip,
     addr: u32,
     len: u32,
     legacy: bool,

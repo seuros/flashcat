@@ -1,13 +1,13 @@
 use anyhow::{bail, Result};
 use std::time::Duration;
 
-use crate::db::SpiNorDef;
+use crate::chip::ResolvedChip;
 use crate::progress::Progress;
 use crate::usb::{UsbDevice, UsbReq};
 
 use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
 
-pub async fn write(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, data: &[u8]) -> Result<()> {
+pub async fn write(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data: &[u8]) -> Result<()> {
     let mut pb = Progress::new("Writing", data.len() as u64);
     let mut addr = offset;
     let mut remaining = data;
@@ -27,7 +27,7 @@ pub async fn write(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, data: &[u8]) 
     Ok(())
 }
 
-async fn write_page(dev: &UsbDevice, chip: &SpiNorDef, addr: u32, data: &[u8]) -> Result<()> {
+async fn write_page(dev: &UsbDevice, chip: &ResolvedChip, addr: u32, data: &[u8]) -> Result<()> {
     // ctrl_out arms the firmware, bulk_out must follow without delay
     let setup = write_setup_packet(chip, addr, data.len() as u32);
     dev.ctrl_out_nodelay(UsbReq::SpiWriteFlash, 0, Some(&setup)).await?;
@@ -35,7 +35,7 @@ async fn write_page(dev: &UsbDevice, chip: &SpiNorDef, addr: u32, data: &[u8]) -
     wait_wip(dev).await
 }
 
-pub(crate) fn write_setup_packet(chip: &SpiNorDef, offset: u32, count: u32) -> [u8; 15] {
+pub(crate) fn write_setup_packet(chip: &ResolvedChip, offset: u32, count: u32) -> [u8; 15] {
     [
         0x02, // PAGE_PROGRAM
         0x06, // WREN

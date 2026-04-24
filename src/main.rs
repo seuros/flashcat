@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod chip;
 mod cmd;
 mod db;
 mod fpga;
@@ -11,6 +12,8 @@ mod progress;
 mod programmer;
 mod spi;
 mod usb;
+
+pub(crate) use chip::ResolvedChip;
 
 use fpga::Voltage;
 use spi::SpiSpeed;
@@ -175,7 +178,7 @@ pub(crate) async fn setup(voltage: Voltage, speed: SpiSpeed) -> Result<usb::UsbD
 pub(crate) async fn prepare(
     vc: VoltageChoice,
     speed: SpiSpeed,
-) -> Result<(usb::UsbDevice, &'static db::SpiNorDef, Voltage)> {
+) -> Result<(usb::UsbDevice, ResolvedChip, Voltage)> {
     match vc {
         VoltageChoice::Auto => {
             let (dev, chip_opt, voltage) = spi::auto_probe(speed).await?;

@@ -15,7 +15,7 @@ pub async fn cmd_erase(
     match (offset, length) {
         (None, None) => {
             info!("chip erase: {} — this may take up to 200 seconds", chip.name);
-            spi::erase_chip(&dev, chip).await?;
+            spi::erase_chip(&dev, &chip).await?;
             println!("Erased (chip)");
         }
         (off, len) => {
@@ -32,7 +32,7 @@ pub async fn cmd_erase(
                 None => max_len,
             };
             info!("range erase: {off:#010x}..{:#010x}", off + len);
-            spi::erase_range(&dev, chip, off, len).await?;
+            spi::erase_range(&dev, &chip, off, len).await?;
             println!("Erased {} bytes at {off:#010x}", len);
         }
     }

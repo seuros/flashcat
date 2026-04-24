@@ -1,14 +1,14 @@
 use anyhow::{bail, Result};
 use tracing::info;
 
-use crate::db::SpiNorDef;
+use crate::chip::ResolvedChip;
 use crate::progress::Progress;
 use crate::usb::UsbDevice;
 
 use super::bus::{spibus_write, ss_disable, ss_enable};
 use super::write::{wait_wip, wait_wip_block, wait_wip_long, write_enable};
 
-pub async fn erase_chip(dev: &UsbDevice, chip: &SpiNorDef) -> Result<()> {
+pub async fn erase_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     info!("chip erase: {} ({} bytes)", chip.name, chip.size_bytes);
     write_enable(dev).await?;
     ss_enable(dev).await?;
@@ -20,7 +20,7 @@ pub async fn erase_chip(dev: &UsbDevice, chip: &SpiNorDef) -> Result<()> {
 /// Erase a single aligned sector/block at `addr`.
 /// 3-byte chips: 0x20 (4KB SE) / 0xD8 (64KB BE).
 /// 4-byte chips: 0x21 (4KB SE4B) / 0xDC (64KB BE4B) — avoids EN4B mode entry.
-pub async fn erase_unit(dev: &UsbDevice, chip: &SpiNorDef, addr: u32) -> Result<()> {
+pub async fn erase_unit(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<()> {
     let cmd: u8 = match (chip.addr_bytes, chip.erase_size <= 4096) {
         (4, true)  => 0x21, // Sector Erase 4-byte address
         (4, false) => 0xDC, // Block Erase 64KB 4-byte address
@@ -73,7 +73,7 @@ pub(crate) fn erase_range_bounds(unit: u32, offset: u32, len: u32) -> Result<(u3
 }
 
 /// Erase all erase units that overlap [offset, offset+len).
-pub async fn erase_range(dev: &UsbDevice, chip: &SpiNorDef, offset: u32, len: u32) -> Result<()> {
+pub async fn erase_range(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, len: u32) -> Result<()> {
     let unit = chip.erase_size;
     let (first, count) = erase_range_bounds(unit, offset, len)?;
     let last = first + (count - 1) * unit;

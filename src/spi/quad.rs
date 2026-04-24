@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::time::Duration;
 use tracing::{debug, warn};
 
-use crate::db::SpiNorDef;
+use crate::chip::ResolvedChip;
 use crate::progress::Progress;
 use crate::usb::{UsbDevice, UsbReq};
 
@@ -88,7 +88,7 @@ pub async fn enable_quad(dev: &UsbDevice) -> Result<()> {
 /// Read `length` bytes starting at `offset` using the SQI Quad Output Fast Read path.
 pub async fn read_quad(
     dev: &UsbDevice,
-    chip: &SpiNorDef,
+    chip: &ResolvedChip,
     offset: u32,
     length: u32,
 ) -> Result<Vec<u8>> {
@@ -111,7 +111,7 @@ pub async fn read_quad(
 
 async fn read_quad_block(
     dev: &UsbDevice,
-    chip: &SpiNorDef,
+    chip: &ResolvedChip,
     addr: u32,
     len: u32,
 ) -> Result<Vec<u8>> {
@@ -129,7 +129,7 @@ async fn read_quad_block(
 
 async fn try_read_quad_block(
     dev: &UsbDevice,
-    chip: &SpiNorDef,
+    chip: &ResolvedChip,
     addr: u32,
     len: u32,
 ) -> Result<Vec<u8>> {

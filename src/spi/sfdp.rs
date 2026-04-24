@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use tracing::{debug, info, warn};
 
+use crate::chip::{EraseType, ParamSource, ResolvedChip};
 use crate::db::{ChipVoltage, SpiNorDef};
 use crate::fpga::Voltage;
 use crate::spi::read::read_setup_packet;
@@ -29,12 +30,6 @@ pub struct SfdpInfo {
     pub fast_read_114: bool,        // 1-1-4 fast read supported
     pub fast_read_144: bool,        // 1-4-4 fast read supported
     pub dtr_supported: bool,
-}
-
-#[derive(Debug)]
-pub struct EraseType {
-    pub size_bytes: u32,
-    pub opcode: u8,
 }
 
 pub async fn read_sfdp(dev: &UsbDevice) -> Result<SfdpInfo> {
@@ -159,27 +154,31 @@ pub async fn try_read_sfdp(dev: &UsbDevice) -> Option<SfdpInfo> {
     }
 }
 
-/// Build a heap-allocated SpiNorDef from SFDP data + known voltage.
-/// Uses Box::leak to produce a &'static reference (valid for CLI lifetime).
-pub fn sfdp_to_chip_def(
-    info: &SfdpInfo,
-    rdid: [u8; 3],
-    voltage: Voltage,
-) -> &'static SpiNorDef {
-    let voltage_enum = match voltage {
+fn voltage_to_chip_voltage(voltage: Voltage) -> ChipVoltage {
+    match voltage {
         Voltage::V1_8 => ChipVoltage::V1_8,
         Voltage::V3_3 | Voltage::V5_0 => ChipVoltage::V3_3,
-    };
+    }
+}
 
-    let erase_size = info
-        .erase_types
+fn sfdp_erase_size(info: &SfdpInfo) -> u32 {
+    info.erase_types
         .iter()
         .map(|e| e.size_bytes)
         .min()
-        .unwrap_or(4096);
+        .unwrap_or(4096)
+}
 
-    let addr_bytes = if info.size_bytes > 0x100_0000 { 4 } else { 3 };
+fn sfdp_addr_bytes(size_bytes: u32) -> u8 {
+    if size_bytes > 0x100_0000 { 4 } else { 3 }
+}
+
+/// Build a `ResolvedChip` from SFDP data alone (no DB match).
+pub fn sfdp_to_resolved(info: &SfdpInfo, rdid: [u8; 3], voltage: Voltage) -> ResolvedChip {
+    let erase_size = sfdp_erase_size(info);
+    let addr_bytes = sfdp_addr_bytes(info.size_bytes);
     let quad = info.fast_read_114 || info.fast_read_144;
+    let chip_voltage = voltage_to_chip_voltage(voltage);
 
     let name = format!(
         "Unknown ({:#04x}:{:#04x}:{:#04x}) via SFDP",
@@ -187,20 +186,49 @@ pub fn sfdp_to_chip_def(
     );
 
     info!(
-        "SFDP: constructed chip def — {} {} bytes page={} erase={} addr={}-byte quad={}",
+        "SFDP: constructed chip — {} {} bytes page={} erase={} addr={}-byte quad={}",
         name, info.size_bytes, info.page_size, erase_size, addr_bytes, quad
     );
 
-    Box::leak(Box::new(SpiNorDef {
+    ResolvedChip {
         name,
         mfr: rdid[0],
         id1: rdid[1],
         id2: rdid[2],
+        voltage: chip_voltage,
         size_bytes: info.size_bytes,
         page_size: info.page_size,
         erase_size,
+        erase_types: info.erase_types.clone(),
         addr_bytes,
-        voltage: voltage_enum,
         quad,
-    }))
+        source: ParamSource::Sfdp,
+    }
+}
+
+/// Build a `ResolvedChip` using DB name/voltage and SFDP geometry.
+pub fn merge_db_with_sfdp(db: &SpiNorDef, info: &SfdpInfo) -> ResolvedChip {
+    let erase_size = sfdp_erase_size(info);
+    let addr_bytes = sfdp_addr_bytes(info.size_bytes);
+    let quad = info.fast_read_114 || info.fast_read_144 || db.quad;
+
+    info!(
+        "SFDP merge: {} DB={} bytes SFDP={} bytes — using SFDP geometry",
+        db.name, db.size_bytes, info.size_bytes
+    );
+
+    ResolvedChip {
+        name: db.name.clone(),
+        mfr: db.mfr,
+        id1: db.id1,
+        id2: db.id2,
+        voltage: db.voltage,
+        size_bytes: info.size_bytes,
+        page_size: info.page_size,
+        erase_size,
+        erase_types: info.erase_types.clone(),
+        addr_bytes,
+        quad,
+        source: ParamSource::DatabaseWithSfdp,
+    }
 }

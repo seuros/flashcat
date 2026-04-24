@@ -29,16 +29,16 @@ pub async fn cmd_write(
     }
 
     if erase {
-        spi::erase_range(&dev, chip, offset, data.len() as u32).await?;
+        spi::erase_range(&dev, &chip, offset, data.len() as u32).await?;
     }
 
     info!("writing {} bytes to {} at offset {offset:#010x}", data.len(), chip.name);
-    spi::write(&dev, chip, offset, &data).await?;
+    spi::write(&dev, &chip, offset, &data).await?;
     println!("Written {} bytes", data.len());
 
     if verify {
         info!("verifying...");
-        let readback = spi::read(&dev, chip, offset, data.len() as u32, false).await?;
+        let readback = spi::read(&dev, &chip, offset, data.len() as u32, false).await?;
         if readback != data {
             let diffs = data.iter().zip(readback.iter()).filter(|(a, b)| a != b).count();
             bail!("verify failed — {diffs} bytes differ");
