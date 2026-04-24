@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::bios::layout;
+use crate::fpga;
 use crate::spi::SpiSpeed;
 use crate::{prepare, spi, VoltageChoice};
 
@@ -18,7 +19,23 @@ pub async fn cmd_read(
     region: Option<String>,
 ) -> Result<()> {
     let (dev, chip, _voltage) = prepare(vc, speed).await?;
+    let result = run(&dev, &chip, speed, &file, offset, length, quad, legacy_read, &layout, &region).await;
+    fpga::vcc_off(&dev).await.ok();
+    result
+}
 
+async fn run(
+    dev: &crate::usb::UsbDevice,
+    chip: &crate::ResolvedChip,
+    speed: SpiSpeed,
+    file: &PathBuf,
+    offset: u32,
+    length: Option<u32>,
+    quad: bool,
+    legacy_read: bool,
+    layout: &Option<PathBuf>,
+    region: &Option<String>,
+) -> Result<()> {
     if quad && !chip.quad {
         bail!("{} does not support Quad SPI reads", chip.name);
     }
@@ -26,25 +43,22 @@ pub async fn cmd_read(
         bail!("--quad requires Mach1 hardware — Pro PCB5 does not route IO2/IO3 to the chip socket");
     }
 
-    let (eff_offset, eff_len) = if let Some(ref rname) = region {
-        let source = match &layout {
+    let (eff_offset, eff_len) = if let Some(rname) = region {
+        let source = match layout {
             Some(p) => layout::RegionSource::LayoutFile(p.clone()),
             None => layout::RegionSource::FmapScan,
         };
-        let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
+        let r = layout::resolve_region(source, rname, chip, dev, speed).await?;
         (r.offset, Some(r.length))
     } else if layout.is_some() {
         let regions = layout::parse_layout_file(layout.as_ref().unwrap())?;
         eprintln!("Available regions:");
-        for r in &regions {
-            eprintln!("  {}", r.name);
-        }
+        for r in &regions { eprintln!("  {}", r.name); }
         bail!("--layout requires --region");
     } else {
         (offset, length)
     };
 
-    // validate range
     if eff_offset >= chip.size_bytes {
         bail!("offset {eff_offset:#x} exceeds chip size {:#x}", chip.size_bytes);
     }
@@ -61,14 +75,14 @@ pub async fn cmd_read(
 
     let data = if quad {
         info!("quad SPI mode: enabling QE bit and using SqiRdFlash");
-        spi::enable_quad(&dev).await?;
-        spi::sqi_setup(&dev, speed.0).await?;
-        spi::read_quad(&dev, &chip, eff_offset, len).await?
+        spi::enable_quad(dev).await?;
+        spi::sqi_setup(dev, speed.0).await?;
+        spi::read_quad(dev, chip, eff_offset, len).await?
     } else {
-        spi::read(&dev, &chip, eff_offset, len, legacy_read).await?
+        spi::read(dev, chip, eff_offset, len, legacy_read).await?
     };
 
-    std::fs::write(&file, &data).with_context(|| format!("failed to write {}", file.display()))?;
+    std::fs::write(file, &data).with_context(|| format!("failed to write {}", file.display()))?;
     println!("Saved {} bytes → {}", data.len(), file.display());
     Ok(())
 }

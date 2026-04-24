@@ -344,5 +344,8 @@ pub async fn auto_probe(
 
     let _m = probe.exhausted().unwrap();
     info!("auto-probe: no chip found at either voltage");
+    if let Err(e) = fpga::vcc_off(&dev).await {
+        tracing::warn!("vcc_off after failed probe: {e}");
+    }
     Ok((dev, None, Voltage::V3_3))
 }

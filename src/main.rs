@@ -241,10 +241,15 @@ pub(crate) async fn prepare(
         }
         VoltageChoice::Explicit(voltage) => {
             let dev = setup(voltage, speed).await?;
-            let chip = spi::detect(&dev, voltage)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("no chip detected"))?;
-            Ok((dev, chip, voltage))
+            match spi::detect(&dev, voltage).await? {
+                Some(chip) => Ok((dev, chip, voltage)),
+                None => {
+                    if let Err(e) = fpga::vcc_off(&dev).await {
+                        tracing::warn!("vcc_off after no chip: {e}");
+                    }
+                    anyhow::bail!("no chip detected")
+                }
+            }
         }
     }
 }
