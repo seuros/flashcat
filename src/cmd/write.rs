@@ -14,6 +14,7 @@ pub async fn cmd_write(
     offset: u32,
     erase: bool,
     verify: bool,
+    smart: bool,
     layout: Option<PathBuf>,
     region: Option<String>,
 ) -> Result<()> {
@@ -29,8 +30,8 @@ pub async fn cmd_write(
             };
             let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
             (r.offset, Some(r.length))
-        } else if layout.is_some() {
-            let regions = layout::parse_layout_file(layout.as_ref().unwrap())?;
+        } else if let Some(ref lpath) = layout {
+            let regions = layout::parse_layout_file(lpath)?;
             eprintln!("Available regions:");
             for r in &regions { eprintln!("  {}", r.name); }
             bail!("--layout requires --region");
@@ -38,14 +39,11 @@ pub async fn cmd_write(
             (offset, None)
         };
 
-        if let Some(region_len) = eff_len {
-            if data.len() != region_len as usize {
-                bail!(
-                    "file is {} bytes but region is {} bytes — sizes must match for region write",
-                    data.len(), region_len
-                );
-            }
-        }
+        if let Some(region_len) = eff_len
+            && data.len() != region_len as usize { bail!(
+                "file is {} bytes but region is {} bytes — sizes must match for region write",
+                data.len(), region_len
+            ); }
 
         if eff_offset >= chip.size_bytes {
             bail!("offset {eff_offset:#x} exceeds chip size {:#x}", chip.size_bytes);
@@ -58,13 +56,25 @@ pub async fn cmd_write(
             );
         }
 
-        if erase {
-            spi::erase_range(&dev, &chip, eff_offset, data.len() as u32).await?;
+        if smart {
+            info!("smart write: read-compare-erase-write {} bytes to {} at {eff_offset:#010x}", data.len(), chip.name, );
+            spi::write_smart(&dev, &chip, eff_offset, &data).await?;
+            println!("Written {} bytes (smart)", data.len());
+        } else {
+            if erase {
+                let full_chip = eff_offset == 0 && data.len() as u32 == chip.size_bytes;
+                if full_chip {
+                    info!("chip erase: {} — this may take up to {}s", chip.name, chip.chip_erase_timeout_secs());
+                    spi::erase_chip(&dev, &chip).await?;
+                    println!("Erased (chip)");
+                } else {
+                    spi::erase_range(&dev, &chip, eff_offset, data.len() as u32).await?;
+                }
+            }
+            info!("writing {} bytes to {} at offset {eff_offset:#010x}", data.len(), chip.name);
+            spi::write(&dev, &chip, eff_offset, &data).await?;
+            println!("Written {} bytes", data.len());
         }
-
-        info!("writing {} bytes to {} at offset {eff_offset:#010x}", data.len(), chip.name);
-        spi::write(&dev, &chip, eff_offset, &data).await?;
-        println!("Written {} bytes", data.len());
 
         if verify {
             info!("verifying...");

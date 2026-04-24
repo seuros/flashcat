@@ -27,8 +27,8 @@ pub async fn cmd_compare(
             };
             let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
             (r.offset, Some(r.length))
-        } else if layout.is_some() {
-            let regions = layout::parse_layout_file(layout.as_ref().unwrap())?;
+        } else if let Some(ref lpath) = layout {
+            let regions = layout::parse_layout_file(lpath)?;
             eprintln!("Available regions:");
             for r in &regions { eprintln!("  {}", r.name); }
             bail!("--layout requires --region");

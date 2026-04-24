@@ -5,7 +5,6 @@
 /// AMD firmware images contain an Embedded Firmware Structure identified by the
 /// cookie 0x55AA55AA at one of a small set of well-known offsets. The EFS holds
 /// pointers to the PSP directory and BIOS directory trees.
-
 pub const EFS_COOKIE: u32 = 0x55AA_55AA;
 
 /// Canonical offsets where the EFS may appear in a SPI flash image.

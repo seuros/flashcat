@@ -6,7 +6,7 @@ use crate::progress::Progress;
 use crate::usb::UsbDevice;
 
 use super::bus::{spibus_write, ss_disable, ss_enable};
-use super::write::{wait_wip, wait_wip_block, wait_wip_long, write_enable};
+use super::write::{wait_wip, wait_wip_block, wait_wip_chip_erase, write_enable};
 
 pub async fn erase_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     info!("chip erase: {} ({} bytes)", chip.name, chip.size_bytes);
@@ -14,7 +14,7 @@ pub async fn erase_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     ss_enable(dev).await?;
     spibus_write(dev, &[0xC7]).await?; // CE
     ss_disable(dev).await?;
-    wait_wip_long(dev).await
+    wait_wip_chip_erase(dev, chip).await
 }
 
 /// Erase a single aligned sector/block at `addr`.

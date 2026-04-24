@@ -7,7 +7,6 @@
 ///
 /// Used by pre-IFD Apple Macs and other EFI-only images that carry raw FVs
 /// without an Intel Flash Descriptor wrapper.
-
 const FVH_SIGNATURE: u32 = 0x4856_465F; // '_FVH' little-endian
 const FVH_SIG_OFFSET: u32 = 0x28; // offset of Signature field within FV header
 const MAX_FV_COUNT: usize = 32;
@@ -54,7 +53,7 @@ pub fn scan_efifv(data: &[u8]) -> Option<EfiFvInfo> {
         let fv_start = i as u32 - FVH_SIG_OFFSET;
 
         // FVs must be page-aligned (4096 bytes).
-        if fv_start != 0 && fv_start % 4096 != 0 {
+        if fv_start != 0 && !fv_start.is_multiple_of(4096) {
             i += 1;
             continue;
         }
@@ -94,7 +93,7 @@ fn parse_fv(data: &[u8], fv_start: u32) -> Option<EfiFv> {
     );
 
     // Sanity-check FvLength.
-    if fv_length < MIN_FV_LENGTH || fv_length > MAX_FV_LENGTH {
+    if !(MIN_FV_LENGTH..=MAX_FV_LENGTH).contains(&fv_length) {
         return None;
     }
 
@@ -141,12 +140,12 @@ pub fn print_efifv(info: &EfiFvInfo, _file_size: u32) {
     println!("  volumes: {}", info.volumes.len());
     println!();
     println!(
-        "  {:<3}  {:<10}  {:<10}  {:<36}  {}",
-        "#", "OFFSET", "LENGTH", "GUID", "REV"
+        "  {:<3}  {:<10}  {:<10}  {:<36}  REV",
+        "#", "OFFSET", "LENGTH", "GUID"
     );
     println!(
-        "  {:<3}  {:<10}  {:<10}  {:<36}  {}",
-        "--", "----------", "----------", "------------------------------------", "---"
+        "  {:<3}  {:<10}  {:<10}  {:<36}  ---",
+        "--", "----------", "----------", "------------------------------------"
     );
     for (i, fv) in info.volumes.iter().enumerate() {
         println!(

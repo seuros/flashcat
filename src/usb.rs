@@ -13,6 +13,8 @@ pub const PID_MACH1: u16 = 0x05E1;
 
 pub async fn connect() -> Result<UsbDevice> {
     use crate::programmer::Programmer;
+    use nusb::Speed;
+    use std::time::Duration;
 
     let di = nusb::list_devices()
         .await?
@@ -28,6 +30,12 @@ pub async fn connect() -> Result<UsbDevice> {
         _          => Programmer::Classic,
     };
 
+    // Derive inter-command delay from the kernel-reported negotiated speed.
+    let ctrl_delay = match di.speed() {
+        Some(Speed::High) | Some(Speed::Super) | Some(Speed::SuperPlus) => Duration::from_millis(5),
+        _ => Duration::from_millis(5), // Full/Low/unknown — safe default
+    };
+
     let device = di.open().await?;
     let iface = device.claim_interface(0).await?;
 
@@ -36,5 +44,5 @@ pub async fn connect() -> Result<UsbDevice> {
         iface.set_alt_setting(1).await?;
     }
 
-    Ok(UsbDevice { iface, kind })
+    Ok(UsbDevice { iface, kind, ctrl_delay })
 }

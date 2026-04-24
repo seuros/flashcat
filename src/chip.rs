@@ -32,4 +32,22 @@ pub struct ResolvedChip {
     pub addr_bytes: u8,
     pub quad: bool,
     pub source: ParamSource,
+    /// Max chip erase timeout in ms. Set from SFDP typical time × 8; None means use fallback.
+    pub chip_erase_max_ms: Option<u64>,
+}
+
+impl ResolvedChip {
+    /// Chip erase max timeout in milliseconds.
+    /// Uses SFDP-derived value (typ × 8) when available, falls back to size-based estimate.
+    pub fn chip_erase_timeout_ms(&self) -> u64 {
+        self.chip_erase_max_ms.unwrap_or_else(|| {
+            // Fallback: ~13s per MB, floored at 60s. Conservative but not verified per-chip.
+            let mb = ((self.size_bytes as u64).div_ceil(1024 * 1024)).max(1);
+            (mb * 13_000).max(60_000)
+        })
+    }
+
+    pub fn chip_erase_timeout_secs(&self) -> u64 {
+        self.chip_erase_timeout_ms().div_ceil(1000)
+    }
 }

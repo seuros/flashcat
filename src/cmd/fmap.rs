@@ -48,7 +48,7 @@ pub async fn cmd_fmap(
             return Ok(());
         }
 
-        println!("{:<24} {:<12} {:<10}  {}", "NAME", "OFFSET", "SIZE", "FLAGS");
+        println!("{:<24} {:<12} {:<10}  FLAGS", "NAME", "OFFSET", "SIZE");
         println!("{}", "-".repeat(64));
         for area in &areas {
             println!(

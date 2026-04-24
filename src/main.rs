@@ -102,6 +102,9 @@ enum Cmd {
         /// Read back and verify after writing
         #[arg(long)]
         verify: bool,
+        /// Smart write: read-compare-erase-write (skips matching sectors and 0xFF pages)
+        #[arg(long)]
+        smart: bool,
         /// Layout file for region selection (flashrom format)
         #[arg(long, value_name = "FILE")]
         layout: Option<PathBuf>,
@@ -198,9 +201,9 @@ async fn main() -> Result<()> {
                 layout.clone(), region.clone(),
             ).await
         }
-        Cmd::Write { file, offset, erase, verify, layout, region } => {
+        Cmd::Write { file, offset, erase, verify, smart, layout, region } => {
             cmd::cmd_write(
-                vc, speed, file.clone(), *offset, *erase, *verify,
+                vc, speed, file.clone(), *offset, *erase, *verify, *smart,
                 layout.clone(), region.clone(),
             ).await
         }

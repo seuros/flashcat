@@ -260,6 +260,7 @@ fn db_chip_to_resolved(db: &'static crate::db::SpiNorDef) -> ResolvedChip {
         addr_bytes: db.addr_bytes,
         quad: db.quad,
         source: ParamSource::Database,
+        chip_erase_max_ms: None, // no SFDP — fallback formula used at erase time
     }
 }
 

@@ -47,6 +47,9 @@ pub struct SfdpInfo {
     pub fast_read_114: bool,        // 1-1-4 fast read supported
     pub fast_read_144: bool,        // 1-4-4 fast read supported
     pub dtr_supported: bool,
+    /// Chip erase typical time in ms from DW11 bits[28:24]/[30:29] (JESD216A+).
+    /// None if the table is too short (pre-JESD216A) or field is zero.
+    pub chip_erase_typ_ms: Option<u64>,
 }
 
 pub async fn read_sfdp(dev: &UsbDevice) -> Result<SfdpInfo> {
@@ -130,7 +133,7 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
     if t.len() >= 36 {
         for (dw_idx, shift) in [(7usize, 0u32), (7, 16), (8, 0), (8, 16)] {
             let word = dw(dw_idx);
-            let exp    = ((word >> shift) & 0xFF) as u32;
+            let exp    = (word >> shift) & 0xFF ;
             let opcode = ((word >> (shift + 8)) & 0xFF) as u8;
             if opcode != 0x00 && exp != 0 {
                 erase_types.push(EraseType {
@@ -141,12 +144,26 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
         }
     }
 
-    // DW11 (offset 40): page size = 2^N bytes  (JESD216A+)
-    let page_size = if t.len() >= 44 {
-        let exp = (dw(10) >> 4) & 0x0F;
-        if exp > 0 { 1u32 << exp } else { 256 }
+    // DW11 (offset 40): page size + chip erase typical time (JESD216A+)
+    // Bit layout per jesd216.c (Zephyr): page_size=[7:4], erase_count=[28:24], erase_units=[30:29]
+    let (page_size, chip_erase_typ_ms) = if t.len() >= 44 {
+        let dw11 = dw(10);
+        let ps_exp = (dw11 >> 4) & 0x0F;
+        let page_size = if ps_exp > 0 { 1u32 << ps_exp } else { 256 };
+
+        let count = ((dw11 >> 24) & 0x1F) as u64;
+        let unit_ms: u64 = match (dw11 >> 29) & 0x03 {
+            0 => 16,
+            1 => 256,
+            2 => 4_000,
+            _ => 64_000,
+        };
+        // (count + 1) * unit_ms is always >= 16ms — always Some
+        let chip_erase_typ_ms = Some((count + 1) * unit_ms);
+
+        (page_size, chip_erase_typ_ms)
     } else {
-        256 // default per spec
+        (256, None)
     };
 
     Ok(SfdpInfo {
@@ -157,6 +174,7 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
         fast_read_114,
         fast_read_144,
         dtr_supported,
+        chip_erase_typ_ms,
     })
 }
 
@@ -221,6 +239,7 @@ pub fn sfdp_to_resolved(info: &SfdpInfo, rdid: [u8; 3], voltage: Voltage) -> Res
         addr_bytes,
         quad,
         source: ParamSource::Sfdp,
+        chip_erase_max_ms: info.chip_erase_typ_ms.map(|t| t * 8),
     }
 }
 
@@ -248,5 +267,6 @@ pub fn merge_db_with_sfdp(db: &SpiNorDef, info: &SfdpInfo) -> ResolvedChip {
         addr_bytes,
         quad,
         source: ParamSource::DatabaseWithSfdp,
+        chip_erase_max_ms: info.chip_erase_typ_ms.map(|t| t * 8),
     }
 }

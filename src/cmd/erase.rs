@@ -24,8 +24,8 @@ pub async fn cmd_erase(
             };
             let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
             (Some(r.offset), Some(r.length))
-        } else if layout.is_some() {
-            let regions = layout::parse_layout_file(layout.as_ref().unwrap())?;
+        } else if let Some(ref lpath) = layout {
+            let regions = layout::parse_layout_file(lpath)?;
             eprintln!("Available regions:");
             for r in &regions { eprintln!("  {}", r.name); }
             bail!("--layout requires --region");
@@ -35,7 +35,7 @@ pub async fn cmd_erase(
 
         match (eff_offset, eff_length) {
             (None, None) => {
-                info!("chip erase: {} — this may take up to 200 seconds", chip.name);
+                info!("chip erase: {} — this may take up to {}s", chip.name, chip.chip_erase_timeout_secs());
                 spi::erase_chip(&dev, &chip).await?;
                 println!("Erased (chip)");
             }

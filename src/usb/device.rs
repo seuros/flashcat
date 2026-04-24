@@ -10,7 +10,6 @@ use super::requests::UsbReq;
 use crate::programmer::Programmer;
 
 const TIMEOUT: Duration = Duration::from_millis(5000);
-const USB_DELAY: Duration = Duration::from_millis(5); // matches official app USB_OUT_DELAY
 
 // EP1 IN = 0x81, EP2 OUT = 0x02
 const EP_BULK_IN: u8 = 0x81;
@@ -19,6 +18,8 @@ const EP_BULK_OUT: u8 = 0x02;
 pub struct UsbDevice {
     pub iface: Interface,
     pub kind: Programmer,
+    /// Inter-command delay derived from negotiated USB speed via nusb::Speed.
+    pub ctrl_delay: Duration,
 }
 
 impl UsbDevice {
@@ -32,7 +33,7 @@ impl UsbDevice {
 
     pub async fn ctrl_out(&self, req: UsbReq, data: u32, buf: Option<&[u8]>) -> Result<()> {
         self.ctrl_out_nodelay(req, data, buf).await?;
-        tokio::time::sleep(USB_DELAY).await;
+        tokio::time::sleep(self.ctrl_delay).await;
         Ok(())
     }
 
@@ -85,7 +86,7 @@ impl UsbDevice {
     pub async fn bulk_in(&self, len: usize) -> Result<Vec<u8>> {
         let mut ep = self.iface.endpoint::<Bulk, In>(EP_BULK_IN)?;
         // usbfs requires buffer size to be a multiple of max packet size (512)
-        let aligned = len.next_multiple_of(ep.max_packet_size() as usize);
+        let aligned = len.next_multiple_of(ep.max_packet_size());
         ep.submit(Buffer::new(aligned));
         let completion = ep.next_complete().await;
         if let Err(e) = completion.status {

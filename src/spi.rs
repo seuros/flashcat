@@ -18,7 +18,7 @@ pub use probe::auto_probe;
 pub use quad::{enable_quad, read_quad, sqi_setup};
 pub use read::read;
 pub use sfdp::read_sfdp;
-pub use write::write;
+pub use write::{write, write_smart};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpiSpeed(pub u8); // MHz

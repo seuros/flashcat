@@ -84,8 +84,8 @@ fn parse_ifd(data: &[u8], sig_offset: usize) -> Option<IfdInfo> {
         if entry_offset + 4 > data.len() { break; }
         let flreg = u32::from_le_bytes(data[entry_offset..entry_offset + 4].try_into().ok()?);
 
-        let base  = (flreg & 0x0FFF) as u32;        // bits[11:0]
-        let limit = ((flreg >> 16) & 0x0FFF) as u32; // bits[27:16]
+        let base  = flreg & 0x0FFF;        // bits[11:0]
+        let limit = (flreg >> 16) & 0x0FFF; // bits[27:16]
 
         let present = limit >= base && !(base == 0 && limit == 0 && i > 0);
         let name = REGION_NAMES.get(i).unwrap_or(&"Unknown").to_string();
@@ -109,7 +109,7 @@ pub fn print_ifd(info: &IfdInfo, flash_size: Option<u32>) {
         println!("  flash size   : {:#010x} ({} MB)", sz, sz / (1024 * 1024));
     }
     println!();
-    println!("{:<12} {:<12} {:<12} {:<10}  {}", "REGION", "START", "END", "SIZE", "STATUS");
+    println!("{:<12} {:<12} {:<12} {:<10}  STATUS", "REGION", "START", "END", "SIZE");
     println!("{}", "-".repeat(64));
     for r in &info.regions {
         if r.present {

@@ -11,7 +11,7 @@ pub async fn cmd_regions(layout_file: PathBuf) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<24} {:<12} {:<12}  {}", "NAME", "START", "END", "SIZE");
+    println!("{:<24} {:<12} {:<12}  SIZE", "NAME", "START", "END");
     println!("{}", "-".repeat(60));
 
     for r in &regions {

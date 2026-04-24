@@ -11,11 +11,10 @@ use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
 pub async fn detect(dev: &UsbDevice, voltage: Voltage) -> Result<Option<ResolvedChip>> {
     let id = rdid(dev).await?;
     let chip = detect_from_id(id, voltage)?;
-    if let Some(ref c) = chip {
-        if c.addr_bytes == 4 {
+    if let Some(ref c) = chip
+        && c.addr_bytes == 4 {
             enter_4byte_mode(dev).await?;
         }
-    }
     Ok(chip)
 }
 
