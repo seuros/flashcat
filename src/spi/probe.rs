@@ -90,7 +90,14 @@ async fn resolve_chip(
                 // Try SFDP to improve geometry; fall back to DB-only if unavailable.
                 let chip = match sfdp::try_read_sfdp(dev).await {
                     Some(sfdp_info) => sfdp::merge_db_with_sfdp(db_chip, &sfdp_info),
-                    None => db_chip_to_resolved(db_chip),
+                    None => {
+                        warn!(
+                            "{} identified via RDID but SFDP is absent — \
+                             using DB parameters only (possible counterfeit or non-JESD216 chip)",
+                            db_chip.name
+                        );
+                        db_chip_to_resolved(db_chip)
+                    }
                 };
                 Ok(Resolved::Match(chip))
             } else {
@@ -115,7 +122,14 @@ async fn resolve_chip(
                 if voltage_matches_chip(voltage, db_chip.voltage) {
                     let chip = match sfdp::try_read_sfdp(dev).await {
                         Some(sfdp_info) => sfdp::merge_db_with_sfdp(db_chip, &sfdp_info),
-                        None => db_chip_to_resolved(db_chip),
+                        None => {
+                            warn!(
+                                "{} identified via RDID but SFDP is absent — \
+                                 using DB parameters only (possible counterfeit or non-JESD216 chip)",
+                                db_chip.name
+                            );
+                            db_chip_to_resolved(db_chip)
+                        }
                     };
                     Ok(Resolved::Match(chip))
                 } else {
