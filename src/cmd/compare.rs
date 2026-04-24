@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
+use crate::bios::layout;
 use crate::spi::{self, SpiSpeed};
 use crate::{prepare, VoltageChoice};
 
@@ -11,17 +12,37 @@ pub async fn cmd_compare(
     file: PathBuf,
     offset: u32,
     length: Option<u32>,
+    layout: Option<PathBuf>,
+    region: Option<String>,
 ) -> Result<()> {
     let expected =
         std::fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
 
     let (dev, chip, _voltage) = prepare(vc, speed).await?;
 
-    if offset >= chip.size_bytes {
-        anyhow::bail!("offset {offset:#x} exceeds chip size {:#x}", chip.size_bytes);
+    let (eff_offset, eff_length) = if let Some(ref rname) = region {
+        let source = match &layout {
+            Some(p) => layout::RegionSource::LayoutFile(p.clone()),
+            None => layout::RegionSource::FmapScan,
+        };
+        let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
+        (r.offset, Some(r.length))
+    } else if layout.is_some() {
+        let regions = layout::parse_layout_file(layout.as_ref().unwrap())?;
+        eprintln!("Available regions:");
+        for r in &regions {
+            eprintln!("  {}", r.name);
+        }
+        bail!("--layout requires --region");
+    } else {
+        (offset, length)
+    };
+
+    if eff_offset >= chip.size_bytes {
+        anyhow::bail!("offset {eff_offset:#x} exceeds chip size {:#x}", chip.size_bytes);
     }
-    let max_len = chip.size_bytes - offset;
-    let len = match length {
+    let max_len = chip.size_bytes - eff_offset;
+    let len = match eff_length {
         Some(l) if l > max_len => {
             anyhow::bail!("length {l:#x} exceeds available space {max_len:#x}")
         }
@@ -37,13 +58,13 @@ pub async fn cmd_compare(
         );
     }
 
-    let flash = spi::read(&dev, &chip, offset, len, false).await?;
+    let flash = spi::read(&dev, &chip, eff_offset, len, false).await?;
 
     let file_hash = hex(Sha256::digest(&expected));
     let flash_hash = hex(Sha256::digest(&flash));
 
     println!("File:  {file_hash}  {}", file.display());
-    println!("Flash: {flash_hash}  (offset {offset:#010x}, {len} bytes)");
+    println!("Flash: {flash_hash}  (offset {eff_offset:#010x}, {len} bytes)");
 
     if file_hash == flash_hash {
         println!("Match: OK");
@@ -58,14 +79,14 @@ pub async fn cmd_compare(
         .zip(flash.iter())
         .enumerate()
         .filter(|(_, (a, b))| a != b)
-        .map(|(i, _)| offset + i as u32)
+        .map(|(i, _)| eff_offset + i as u32)
         .take(8)
         .collect();
 
     let total_diffs = expected.iter().zip(flash.iter()).filter(|(a, b)| a != b).count();
     println!("Diffs: {total_diffs} bytes differ");
     for addr in &diffs {
-        let i = (addr - offset) as usize;
+        let i = (addr - eff_offset) as usize;
         println!("  {addr:#010x}  file={:#04x}  flash={:#04x}", expected[i], flash[i]);
     }
     if total_diffs > diffs.len() {

@@ -4,6 +4,7 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod bios;
 mod chip;
 mod cmd;
 mod db;
@@ -81,6 +82,12 @@ enum Cmd {
         /// Use legacy Read (0x03) instead of Fast Read (0x0B)
         #[arg(long)]
         legacy_read: bool,
+        /// Layout file for region selection (flashrom format)
+        #[arg(long, value_name = "FILE")]
+        layout: Option<PathBuf>,
+        /// Region name to read (requires --layout or uses FMAP scan)
+        #[arg(long, value_name = "NAME")]
+        region: Option<String>,
     },
 
     /// Write file to flash
@@ -95,6 +102,12 @@ enum Cmd {
         /// Read back and verify after writing
         #[arg(long)]
         verify: bool,
+        /// Layout file for region selection (flashrom format)
+        #[arg(long, value_name = "FILE")]
+        layout: Option<PathBuf>,
+        /// Region name to write (requires --layout or uses FMAP scan)
+        #[arg(long, value_name = "NAME")]
+        region: Option<String>,
     },
 
     /// Erase flash (chip by default; --offset + --length for sector range)
@@ -105,6 +118,12 @@ enum Cmd {
         /// Number of bytes to erase (rounded up to erase unit boundary)
         #[arg(long, value_parser = parse_hex_or_dec)]
         length: Option<u32>,
+        /// Layout file for region selection (flashrom format)
+        #[arg(long, value_name = "FILE")]
+        layout: Option<PathBuf>,
+        /// Region name to erase (requires --layout or uses FMAP scan)
+        #[arg(long, value_name = "NAME")]
+        region: Option<String>,
     },
 
     /// Read and decode SFDP (Serial Flash Discoverable Parameters)
@@ -118,6 +137,28 @@ enum Cmd {
         offset: u32,
         #[arg(long, value_parser = parse_hex_or_dec)]
         length: Option<u32>,
+        /// Layout file for region selection (flashrom format)
+        #[arg(long, value_name = "FILE")]
+        layout: Option<PathBuf>,
+        /// Region name to compare (requires --layout or uses FMAP scan)
+        #[arg(long, value_name = "NAME")]
+        region: Option<String>,
+    },
+
+    /// Read FMAP region map from flash (or a local binary dump with --file)
+    Fmap {
+        /// Maximum bytes to scan for FMAP signature (hardware mode only)
+        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0x400000")]
+        scan_limit: u32,
+        /// Scan a local binary dump instead of reading hardware
+        #[arg(short, long, value_name = "FILE")]
+        file: Option<PathBuf>,
+    },
+
+    /// Parse a layout file and list regions (no hardware required)
+    Regions {
+        #[arg(short, long)]
+        file: PathBuf,
     },
 }
 
@@ -146,17 +187,30 @@ async fn main() -> Result<()> {
         Cmd::Check => cmd::cmd_check().await,
         Cmd::Watch => cmd::cmd_watch(vc, speed).await,
         Cmd::Detect => cmd::cmd_detect(vc, speed).await,
-        Cmd::Read { file, offset, length, quad, legacy_read } => {
-            cmd::cmd_read(vc, speed, file.clone(), *offset, *length, *quad, *legacy_read).await
+        Cmd::Read { file, offset, length, quad, legacy_read, layout, region } => {
+            cmd::cmd_read(
+                vc, speed, file.clone(), *offset, *length, *quad, *legacy_read,
+                layout.clone(), region.clone(),
+            ).await
         }
-        Cmd::Write { file, offset, erase, verify } => {
-            cmd::cmd_write(vc, speed, file.clone(), *offset, *erase, *verify).await
+        Cmd::Write { file, offset, erase, verify, layout, region } => {
+            cmd::cmd_write(
+                vc, speed, file.clone(), *offset, *erase, *verify,
+                layout.clone(), region.clone(),
+            ).await
         }
         Cmd::Sfdp => cmd::cmd_sfdp(vc, speed).await,
-        Cmd::Erase { offset, length } => cmd::cmd_erase(vc, speed, *offset, *length).await,
-        Cmd::Compare { file, offset, length } => {
-            cmd::cmd_compare(vc, speed, file.clone(), *offset, *length).await
+        Cmd::Erase { offset, length, layout, region } => {
+            cmd::cmd_erase(vc, speed, *offset, *length, layout.clone(), region.clone()).await
         }
+        Cmd::Compare { file, offset, length, layout, region } => {
+            cmd::cmd_compare(
+                vc, speed, file.clone(), *offset, *length,
+                layout.clone(), region.clone(),
+            ).await
+        }
+        Cmd::Fmap { scan_limit, file } => cmd::cmd_fmap(vc, speed, *scan_limit, file.clone()).await,
+        Cmd::Regions { file } => cmd::cmd_regions(file.clone()).await,
     }
 }
 
