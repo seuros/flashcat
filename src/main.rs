@@ -155,6 +155,9 @@ enum Cmd {
         file: Option<PathBuf>,
     },
 
+    /// Read the chip's unique 64-bit serial number
+    Uid,
+
     /// Parse a layout file and list regions (no hardware required)
     Regions {
         #[arg(short, long)]
@@ -167,8 +170,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
+                .add_directive(tracing::Level::WARN.into()),
         )
+        .without_time()
+        .with_target(false)
         .init();
 
     let cli = Cli::parse();
@@ -210,6 +215,7 @@ async fn main() -> Result<()> {
             ).await
         }
         Cmd::Fmap { scan_limit, file } => cmd::cmd_fmap(vc, speed, *scan_limit, file.clone()).await,
+        Cmd::Uid => cmd::cmd_uid(vc, speed).await,
         Cmd::Regions { file } => cmd::cmd_regions(file.clone()).await,
     }
 }

@@ -6,6 +6,7 @@ mod fmap;
 mod read;
 mod regions;
 mod sfdp;
+mod uid;
 mod watch;
 mod write;
 
@@ -17,5 +18,6 @@ pub use fmap::cmd_fmap;
 pub use read::cmd_read;
 pub use regions::cmd_regions;
 pub use sfdp::cmd_sfdp;
+pub use uid::cmd_uid;
 pub use watch::cmd_watch;
 pub use write::cmd_write;

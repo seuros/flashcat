@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::usb::{UsbDevice, UsbReq};
 
-mod bus;
+pub(crate) mod bus;
 pub(crate) mod detect;
 mod erase;
 mod probe;
