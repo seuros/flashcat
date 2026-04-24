@@ -287,6 +287,7 @@ pub async fn auto_probe(
 
         let id = detect::rdid(&dev).await?;
         let (mfr, id1, id2) = (id[0], id[1], id[2]);
+        info!("auto-probe: 1.8V RDID = {mfr:#04x} {id1:#04x} {id2:#04x}");
 
         if mfr != 0xFF && mfr != 0x00 {
             match resolve_chip(&dev, id, Voltage::V1_8).await? {
@@ -325,24 +326,29 @@ pub async fn auto_probe(
 
     let probe = probe.escalate().unwrap();
 
-    // Phase 2: 3.3V
+    // Phase 2: 3.3V — wrap in async block so any error gets vcc_off before propagating.
     info!("auto-probe: trying 3.3V");
-    fpga::load(&dev, Voltage::V3_3).await?;
-    fpga::set_vcc(&dev, Voltage::V3_3).await?;
-    spi::init(&dev, speed).await?;
+    let phase2: anyhow::Result<Option<ResolvedChip>> = async {
+        fpga::load(&dev, Voltage::V3_3).await?;
+        fpga::set_vcc(&dev, Voltage::V3_3).await?;
+        spi::init(&dev, speed).await?;
 
-    let id = detect::rdid(&dev).await?;
-    let mfr = id[0];
+        let id = detect::rdid(&dev).await?;
+        let (mfr, id1, id2) = (id[0], id[1], id[2]);
+        info!("auto-probe: 3.3V RDID = {mfr:#04x} {id1:#04x} {id2:#04x}");
+        let _ = (id1, id2); // used in log above; id array used below
 
-    if mfr != 0xFF && mfr != 0x00 {
+        if mfr == 0xFF || mfr == 0x00 {
+            return Ok(None);
+        }
+
         match resolve_chip(&dev, id, Voltage::V3_3).await? {
             Resolved::Match(chip) => {
                 info!("auto-probe: identified {} at 3.3V", chip.name);
                 if chip.addr_bytes == 4 {
                     detect::enter_4byte_mode(&dev).await?;
                 }
-                let _m = probe.chip_found().unwrap();
-                return Ok((dev, Some(chip), Voltage::V3_3));
+                Ok(Some(chip))
             }
             Resolved::WrongVoltage(chip) => {
                 // 1.8V chip found at 3.3V probe — shouldn't happen since we checked 1.8V first
@@ -350,16 +356,26 @@ pub async fn auto_probe(
                 anyhow::bail!(
                     "chip {} requires 1.8V but is being probed at 3.3V — use --voltage 1v8",
                     chip.name
-                );
+                )
             }
-            Resolved::None => {}
+            Resolved::None => Ok(None),
+        }
+    }.await;
+
+    match phase2 {
+        Ok(Some(chip)) => {
+            let _m = probe.chip_found().unwrap();
+            return Ok((dev, Some(chip), Voltage::V3_3));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            fpga::vcc_off(&dev).await.ok();
+            return Err(e);
         }
     }
 
     let _m = probe.exhausted().unwrap();
     info!("auto-probe: no chip found at either voltage");
-    if let Err(e) = fpga::vcc_off(&dev).await {
-        tracing::warn!("vcc_off after failed probe: {e}");
-    }
+    fpga::vcc_off(&dev).await.ok();
     Ok((dev, None, Voltage::V3_3))
 }

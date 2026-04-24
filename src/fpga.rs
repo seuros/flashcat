@@ -20,6 +20,7 @@ pub enum Voltage {
 /// LogicOff resets the SSPI interface (fw 1.19 note), but load() always
 /// reinitialises SSPI before the next bitstream, so this is safe post-op.
 pub async fn vcc_off(dev: &UsbDevice) -> Result<()> {
+    info!("VCC off");
     if dev.kind.has_fpga() {
         dev.ctrl_out(UsbReq::LogicOff, 0, None).await?;
     } else {
