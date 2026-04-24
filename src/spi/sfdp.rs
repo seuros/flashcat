@@ -4,11 +4,28 @@ use tracing::{debug, info, warn};
 use crate::chip::{EraseType, ParamSource, ResolvedChip};
 use crate::db::{ChipVoltage, SpiNorDef};
 use crate::fpga::Voltage;
+use crate::spi::bus::{spibus_write, ss_disable, ss_enable};
 use crate::spi::read::read_setup_packet;
 use crate::usb::{UsbDevice, UsbReq};
 
 const SFDP_MAGIC: [u8; 4] = *b"SFDP";
 const JEDEC_BASIC_ID: u16 = 0xFF00;
+
+/// Issue RSTEN (0x66) + RST (0x99) to return the chip to default SPI mode.
+/// Safe to call unconditionally — a no-op on chips that don't support it.
+async fn soft_reset(dev: &UsbDevice) {
+    let _ = async {
+        ss_enable(dev).await?;
+        spibus_write(dev, &[0x66]).await?;
+        ss_disable(dev).await?;
+        ss_enable(dev).await?;
+        spibus_write(dev, &[0x99]).await?;
+        ss_disable(dev).await?;
+        anyhow::Ok(())
+    }.await;
+    // 30 µs recovery per JESD216 spec
+    tokio::time::sleep(std::time::Duration::from_micros(30)).await;
+}
 
 /// Raw SFDP read: opcode 0x5A + 3-byte addr + 1 dummy byte.
 async fn sfdp_read(dev: &UsbDevice, addr: u32, len: u32) -> Result<Vec<u8>> {
@@ -145,6 +162,7 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
 
 /// Try SFDP — returns None if the chip doesn't respond or magic is invalid.
 pub async fn try_read_sfdp(dev: &UsbDevice) -> Option<SfdpInfo> {
+    soft_reset(dev).await;
     match read_sfdp(dev).await {
         Ok(info) => Some(info),
         Err(e) => {
