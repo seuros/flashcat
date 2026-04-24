@@ -8,7 +8,8 @@ pub(crate) mod detect;
 mod erase;
 mod probe;
 mod quad;
-mod read;
+pub(crate) mod read;
+pub mod sfdp;
 mod write;
 
 pub use detect::detect;
@@ -16,6 +17,7 @@ pub use erase::{erase_chip, erase_range};
 pub use probe::auto_probe;
 pub use quad::{enable_quad, read_quad, sqi_setup};
 pub use read::read;
+pub use sfdp::read_sfdp;
 pub use write::write;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -104,6 +104,9 @@ enum Cmd {
         length: Option<u32>,
     },
 
+    /// Read and decode SFDP (Serial Flash Discoverable Parameters)
+    Sfdp,
+
     /// Compare flash contents against a file (SHA-256 + diff report)
     Compare {
         #[arg(short, long)]
@@ -146,6 +149,7 @@ async fn main() -> Result<()> {
         Cmd::Write { file, offset, erase, verify } => {
             cmd::cmd_write(vc, speed, file.clone(), *offset, *erase, *verify).await
         }
+        Cmd::Sfdp => cmd::cmd_sfdp(vc, speed).await,
         Cmd::Erase { offset, length } => cmd::cmd_erase(vc, speed, *offset, *length).await,
         Cmd::Compare { file, offset, length } => {
             cmd::cmd_compare(vc, speed, file.clone(), *offset, *length).await
