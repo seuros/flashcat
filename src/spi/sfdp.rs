@@ -1,6 +1,8 @@
 use anyhow::{bail, Result};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
+use crate::db::{ChipVoltage, SpiNorDef};
+use crate::fpga::Voltage;
 use crate::spi::read::read_setup_packet;
 use crate::usb::{UsbDevice, UsbReq};
 
@@ -144,4 +146,61 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
         fast_read_144,
         dtr_supported,
     })
+}
+
+/// Try SFDP — returns None if the chip doesn't respond or magic is invalid.
+pub async fn try_read_sfdp(dev: &UsbDevice) -> Option<SfdpInfo> {
+    match read_sfdp(dev).await {
+        Ok(info) => Some(info),
+        Err(e) => {
+            warn!("SFDP not available: {e}");
+            None
+        }
+    }
+}
+
+/// Build a heap-allocated SpiNorDef from SFDP data + known voltage.
+/// Uses Box::leak to produce a &'static reference (valid for CLI lifetime).
+pub fn sfdp_to_chip_def(
+    info: &SfdpInfo,
+    rdid: [u8; 3],
+    voltage: Voltage,
+) -> &'static SpiNorDef {
+    let voltage_enum = match voltage {
+        Voltage::V1_8 => ChipVoltage::V1_8,
+        Voltage::V3_3 | Voltage::V5_0 => ChipVoltage::V3_3,
+    };
+
+    let erase_size = info
+        .erase_types
+        .iter()
+        .map(|e| e.size_bytes)
+        .min()
+        .unwrap_or(4096);
+
+    let addr_bytes = if info.size_bytes > 0x100_0000 { 4 } else { 3 };
+    let quad = info.fast_read_114 || info.fast_read_144;
+
+    let name = format!(
+        "Unknown ({:#04x}:{:#04x}:{:#04x}) via SFDP",
+        rdid[0], rdid[1], rdid[2]
+    );
+
+    info!(
+        "SFDP: constructed chip def — {} {} bytes page={} erase={} addr={}-byte quad={}",
+        name, info.size_bytes, info.page_size, erase_size, addr_bytes, quad
+    );
+
+    Box::leak(Box::new(SpiNorDef {
+        name,
+        mfr: rdid[0],
+        id1: rdid[1],
+        id2: rdid[2],
+        size_bytes: info.size_bytes,
+        page_size: info.page_size,
+        erase_size,
+        addr_bytes,
+        voltage: voltage_enum,
+        quad,
+    }))
 }
