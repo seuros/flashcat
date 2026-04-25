@@ -18,7 +18,7 @@ const EP_BULK_OUT: u8 = 0x02;
 pub struct UsbDevice {
     pub iface: Interface,
     pub kind: Programmer,
-    /// Inter-command delay derived from negotiated USB speed via nusb::Speed.
+    /// Inter-command delay, sized by negotiated USB speed.
     pub ctrl_delay: Duration,
 }
 

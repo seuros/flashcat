@@ -11,13 +11,13 @@ mod watch;
 mod write;
 
 pub use check::cmd_check;
-pub use compare::cmd_compare;
+pub use compare::{cmd_compare, CompareOpts};
 pub use detect::cmd_detect;
 pub use erase::cmd_erase;
 pub use fmap::cmd_fmap;
-pub use read::cmd_read;
+pub use read::{cmd_read, ReadOpts};
 pub use regions::cmd_regions;
 pub use sfdp::cmd_sfdp;
 pub use uid::cmd_uid;
 pub use watch::cmd_watch;
-pub use write::cmd_write;
+pub use write::{cmd_write, WriteOpts};

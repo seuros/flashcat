@@ -7,33 +7,35 @@ use crate::fpga;
 use crate::spi::{self, SpiSpeed};
 use crate::{prepare, VoltageChoice};
 
-pub async fn cmd_compare(
-    vc: VoltageChoice,
-    speed: SpiSpeed,
-    file: PathBuf,
-    offset: u32,
-    length: Option<u32>,
-    layout: Option<PathBuf>,
-    region: Option<String>,
-) -> Result<()> {
-    let expected =
-        std::fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
-    let (dev, chip, _voltage) = prepare(vc, speed).await?;
+pub struct CompareOpts {
+    pub vc: VoltageChoice,
+    pub speed: SpiSpeed,
+    pub file: PathBuf,
+    pub offset: u32,
+    pub length: Option<u32>,
+    pub layout: Option<PathBuf>,
+    pub region: Option<String>,
+}
+
+pub async fn cmd_compare(opts: CompareOpts) -> Result<()> {
+    let expected = std::fs::read(&opts.file)
+        .with_context(|| format!("failed to read {}", opts.file.display()))?;
+    let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
     let result = (async {
-        let (eff_offset, eff_length) = if let Some(ref rname) = region {
-            let source = match &layout {
+        let (eff_offset, eff_length) = if let Some(ref rname) = opts.region {
+            let source = match &opts.layout {
                 Some(p) => layout::RegionSource::LayoutFile(p.clone()),
                 None => layout::RegionSource::FmapScan,
             };
-            let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
+            let r = layout::resolve_region(source, rname, &chip, &dev, opts.speed).await?;
             (r.offset, Some(r.length))
-        } else if let Some(ref lpath) = layout {
+        } else if let Some(ref lpath) = opts.layout {
             let regions = layout::parse_layout_file(lpath)?;
             eprintln!("Available regions:");
             for r in &regions { eprintln!("  {}", r.name); }
             bail!("--layout requires --region");
         } else {
-            (offset, length)
+            (opts.offset, opts.length)
         };
 
         if eff_offset >= chip.size_bytes {
@@ -54,7 +56,7 @@ pub async fn cmd_compare(
         let file_hash = hex(Sha256::digest(&expected));
         let flash_hash = hex(Sha256::digest(&flash));
 
-        println!("File:  {file_hash}  {}", file.display());
+        println!("File:  {file_hash}  {}", opts.file.display());
         println!("Flash: {flash_hash}  (offset {eff_offset:#010x}, {len} bytes)");
 
         if file_hash == flash_hash {

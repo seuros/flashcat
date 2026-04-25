@@ -7,36 +7,38 @@ use crate::fpga;
 use crate::spi::SpiSpeed;
 use crate::{prepare, spi, VoltageChoice};
 
-pub async fn cmd_write(
-    vc: VoltageChoice,
-    speed: SpiSpeed,
-    file: PathBuf,
-    offset: u32,
-    erase: bool,
-    verify: bool,
-    smart: bool,
-    layout: Option<PathBuf>,
-    region: Option<String>,
-) -> Result<()> {
-    let (dev, chip, _voltage) = prepare(vc, speed).await?;
-    let result = (async {
-        let data = std::fs::read(&file)
-            .with_context(|| format!("failed to read {}", file.display()))?;
+pub struct WriteOpts {
+    pub vc: VoltageChoice,
+    pub speed: SpiSpeed,
+    pub file: PathBuf,
+    pub offset: u32,
+    pub erase: bool,
+    pub verify: bool,
+    pub smart: bool,
+    pub layout: Option<PathBuf>,
+    pub region: Option<String>,
+}
 
-        let (eff_offset, eff_len) = if let Some(ref rname) = region {
-            let source = match &layout {
+pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
+    let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
+    let result = (async {
+        let data = std::fs::read(&opts.file)
+            .with_context(|| format!("failed to read {}", opts.file.display()))?;
+
+        let (eff_offset, eff_len) = if let Some(ref rname) = opts.region {
+            let source = match &opts.layout {
                 Some(p) => layout::RegionSource::LayoutFile(p.clone()),
                 None => layout::RegionSource::FmapScan,
             };
-            let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
+            let r = layout::resolve_region(source, rname, &chip, &dev, opts.speed).await?;
             (r.offset, Some(r.length))
-        } else if let Some(ref lpath) = layout {
+        } else if let Some(ref lpath) = opts.layout {
             let regions = layout::parse_layout_file(lpath)?;
             eprintln!("Available regions:");
             for r in &regions { eprintln!("  {}", r.name); }
             bail!("--layout requires --region");
         } else {
-            (offset, None)
+            (opts.offset, None)
         };
 
         if let Some(region_len) = eff_len
@@ -56,12 +58,12 @@ pub async fn cmd_write(
             );
         }
 
-        if smart {
+        if opts.smart {
             info!("smart write: read-compare-erase-write {} bytes to {} at {eff_offset:#010x}", data.len(), chip.name, );
             spi::write_smart(&dev, &chip, eff_offset, &data).await?;
             println!("Written {} bytes (smart)", data.len());
         } else {
-            if erase {
+            if opts.erase {
                 let full_chip = eff_offset == 0 && data.len() as u32 == chip.size_bytes;
                 if full_chip {
                     info!("chip erase: {} — this may take up to {}s", chip.name, chip.chip_erase_timeout_secs());
@@ -76,7 +78,7 @@ pub async fn cmd_write(
             println!("Written {} bytes", data.len());
         }
 
-        if verify {
+        if opts.verify {
             info!("verifying...");
             let readback = spi::read(&dev, &chip, eff_offset, data.len() as u32, false).await?;
             if readback != data {

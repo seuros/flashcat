@@ -196,26 +196,42 @@ async fn main() -> Result<()> {
         Cmd::Watch => cmd::cmd_watch(vc, speed).await,
         Cmd::Detect => cmd::cmd_detect(vc, speed).await,
         Cmd::Read { file, offset, length, quad, legacy_read, layout, region } => {
-            cmd::cmd_read(
-                vc, speed, file.clone(), *offset, *length, *quad, *legacy_read,
-                layout.clone(), region.clone(),
-            ).await
+            cmd::cmd_read(cmd::ReadOpts {
+                vc, speed,
+                file: file.clone(),
+                offset: *offset,
+                length: *length,
+                quad: *quad,
+                legacy_read: *legacy_read,
+                layout: layout.clone(),
+                region: region.clone(),
+            }).await
         }
         Cmd::Write { file, offset, erase, verify, smart, layout, region } => {
-            cmd::cmd_write(
-                vc, speed, file.clone(), *offset, *erase, *verify, *smart,
-                layout.clone(), region.clone(),
-            ).await
+            cmd::cmd_write(cmd::WriteOpts {
+                vc, speed,
+                file: file.clone(),
+                offset: *offset,
+                erase: *erase,
+                verify: *verify,
+                smart: *smart,
+                layout: layout.clone(),
+                region: region.clone(),
+            }).await
         }
         Cmd::Sfdp => cmd::cmd_sfdp(vc, speed).await,
         Cmd::Erase { offset, length, layout, region } => {
             cmd::cmd_erase(vc, speed, *offset, *length, layout.clone(), region.clone()).await
         }
         Cmd::Compare { file, offset, length, layout, region } => {
-            cmd::cmd_compare(
-                vc, speed, file.clone(), *offset, *length,
-                layout.clone(), region.clone(),
-            ).await
+            cmd::cmd_compare(cmd::CompareOpts {
+                vc, speed,
+                file: file.clone(),
+                offset: *offset,
+                length: *length,
+                layout: layout.clone(),
+                region: region.clone(),
+            }).await
         }
         Cmd::Fmap { scan_limit, file } => cmd::cmd_fmap(vc, speed, *scan_limit, file.clone()).await,
         Cmd::Uid => cmd::cmd_uid(vc, speed).await,

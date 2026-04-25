@@ -62,7 +62,6 @@ pub async fn write(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data: &[u8
 /// Equivalent to flashrom's default write strategy.
 pub async fn write_smart(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data: &[u8]) -> Result<()> {
     let erase_size = chip.erase_size as usize;
-    let page_size  = chip.page_size as usize;
 
     // Read current flash content in the target range
     let current = read(dev, chip, offset, data.len() as u32, false).await?;
@@ -71,11 +70,7 @@ pub async fn write_smart(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data
     let first_sector = (offset / chip.erase_size) * chip.erase_size;
     let last_sector  = ((offset + data.len() as u32).div_ceil(chip.erase_size)) * chip.erase_size;
 
-    let mut sectors_skipped = 0u32;
-    let mut sectors_erased  = 0u32;
-    let mut pages_skipped   = 0u32;
-    let mut pages_written   = 0u32;
-
+    let mut stats = SmartStats::default();
     let mut pb = Progress::new("Writing", data.len() as u64);
 
     let mut sector_base = first_sector;
@@ -89,7 +84,7 @@ pub async fn write_smart(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data
         let current_sector = &current[data_start..data_end];
 
         if target == current_sector {
-            sectors_skipped += 1;
+            stats.sectors_skipped += 1;
             pb.inc((data_end - data_start) as u64);
             sector_base += chip.erase_size;
             continue;
@@ -99,45 +94,68 @@ pub async fn write_smart(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data
         let needs_erase = target.iter().zip(current_sector).any(|(t, e)| t & !e != 0);
         if needs_erase {
             erase_unit(dev, chip, sector_base).await?;
-            sectors_erased += 1;
+            stats.sectors_erased += 1;
         }
 
-        let mut page_off = 0usize;
-        while page_off < target.len() {
-            let page_end = (page_off + page_size).min(target.len());
-            let page = &target[page_off..page_end];
-
-            // Skip pages that are all 0xFF (already erased / no-op)
-            if page.iter().all(|&b| b == 0xFF) {
-                pages_skipped += 1;
-                pb.inc((page_end - page_off) as u64);
-                page_off = page_end;
-                continue;
-            }
-
-            // Batch consecutive non-0xFF pages into one write_block (up to WRITE_BLOCK).
-            let mut run_end = page_end;
-            while run_end < target.len()
-                && run_end - page_off < WRITE_BLOCK as usize
-                && !target[run_end..((run_end + page_size).min(target.len()))].iter().all(|&b| b == 0xFF)
-            {
-                run_end = (run_end + page_size).min(target.len());
-            }
-
-            let write_addr = sector_base + page_off as u32;
-            write_block(dev, chip, write_addr, &target[page_off..run_end]).await?;
-            pages_written += ((run_end - page_off).div_ceil(page_size)) as u32;
-            pb.inc((run_end - page_off) as u64);
-            page_off = run_end;
-        }
+        write_sector_pages(dev, chip, sector_base, target, &mut pb, &mut stats).await?;
         sector_base += chip.erase_size;
     }
 
     pb.finish();
     info!(
         "smart write: {} sectors skipped, {} erased, {} pages written, {} pages skipped (0xFF)",
-        sectors_skipped, sectors_erased, pages_written, pages_skipped
+        stats.sectors_skipped, stats.sectors_erased, stats.pages_written, stats.pages_skipped
     );
+    Ok(())
+}
+
+#[derive(Default)]
+struct SmartStats {
+    sectors_skipped: u32,
+    sectors_erased:  u32,
+    pages_skipped:   u32,
+    pages_written:   u32,
+}
+
+// Write a sector's worth of pages, skipping all-0xFF pages and batching
+// consecutive non-0xFF pages into a single write_block (≤ WRITE_BLOCK bytes).
+async fn write_sector_pages(
+    dev: &UsbDevice,
+    chip: &ResolvedChip,
+    sector_base: u32,
+    target: &[u8],
+    pb: &mut Progress,
+    stats: &mut SmartStats,
+) -> Result<()> {
+    let page_size = chip.page_size as usize;
+    let mut page_off = 0usize;
+    while page_off < target.len() {
+        let page_end = (page_off + page_size).min(target.len());
+        let page = &target[page_off..page_end];
+
+        // Skip pages that are all 0xFF (already erased / no-op)
+        if page.iter().all(|&b| b == 0xFF) {
+            stats.pages_skipped += 1;
+            pb.inc((page_end - page_off) as u64);
+            page_off = page_end;
+            continue;
+        }
+
+        // Batch consecutive non-0xFF pages into one write_block (up to WRITE_BLOCK).
+        let mut run_end = page_end;
+        while run_end < target.len()
+            && run_end - page_off < WRITE_BLOCK as usize
+            && !target[run_end..((run_end + page_size).min(target.len()))].iter().all(|&b| b == 0xFF)
+        {
+            run_end = (run_end + page_size).min(target.len());
+        }
+
+        let write_addr = sector_base + page_off as u32;
+        write_block(dev, chip, write_addr, &target[page_off..run_end]).await?;
+        stats.pages_written += ((run_end - page_off).div_ceil(page_size)) as u32;
+        pb.inc((run_end - page_off) as u64);
+        page_off = run_end;
+    }
     Ok(())
 }
 
