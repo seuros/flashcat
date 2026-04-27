@@ -96,7 +96,7 @@ enum Cmd {
         file: PathBuf,
         #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
         offset: u32,
-        /// Erase affected sectors before writing
+        /// Erase affected sectors before writing (automatic for full-chip images)
         #[arg(long)]
         erase: bool,
         /// Read back and verify after writing

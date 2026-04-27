@@ -86,7 +86,7 @@ flashcat watch
 | Flag | Description |
 |------|-------------|
 | `--offset` | Start address |
-| `--erase` | Erase affected sectors before writing |
+| `--erase` | Erase affected sectors before writing; full-chip images erase automatically |
 | `--verify` | Read back and verify after writing |
 | `--layout <file>` | Layout file for region selection |
 | `--region <name>` | Write only the named region (file size must match region size exactly) |

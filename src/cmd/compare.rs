@@ -1,11 +1,11 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 use crate::bios::layout;
 use crate::fpga;
 use crate::spi::{self, SpiSpeed};
-use crate::{prepare, VoltageChoice};
+use crate::{VoltageChoice, prepare};
 
 pub struct CompareOpts {
     pub vc: VoltageChoice,
@@ -78,12 +78,60 @@ pub async fn cmd_compare(opts: CompareOpts) -> Result<()> {
         if total_diffs > diffs.len() {
             println!("  ... ({} more)", total_diffs - diffs.len());
         }
+        if probable_missing_erase(&expected, &flash) {
+            println!(
+                "Hint: flash only has bits cleared relative to the file; SPI NOR cannot change 0 bits back to 1 without erase."
+            );
+            println!("      Re-write with `write --erase --verify` or `write --smart --verify`.");
+        }
         anyhow::bail!("verification failed")
     }).await;
     fpga::vcc_off(&dev).await.ok();
     result
 }
 
+pub(crate) fn probable_missing_erase(expected: &[u8], actual: &[u8]) -> bool {
+    let mut mismatches = 0usize;
+
+    for (&expected, &actual) in expected.iter().zip(actual) {
+        if expected == actual {
+            continue;
+        }
+
+        mismatches += 1;
+        if actual & !expected != 0 {
+            return false;
+        }
+    }
+
+    mismatches > 0
+}
+
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probable_missing_erase;
+
+    #[test]
+    fn detects_readback_with_only_cleared_bits() {
+        let expected = [0xa5, 0xf0, 0x06, 0x15];
+        let actual = [0x00, 0xa0, 0x02, 0x10];
+        assert!(probable_missing_erase(&expected, &actual));
+    }
+
+    #[test]
+    fn ignores_matching_buffers() {
+        let expected = [0xff, 0x00, 0xa5];
+        assert!(!probable_missing_erase(&expected, &expected));
+    }
+
+    #[test]
+    fn rejects_unexpected_set_bits() {
+        let expected = [0x00, 0xa0];
+        let actual = [0x01, 0xa0];
+        assert!(!probable_missing_erase(&expected, &actual));
+    }
 }

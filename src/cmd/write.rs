@@ -1,11 +1,13 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use tracing::info;
 
 use crate::bios::layout;
 use crate::fpga;
 use crate::spi::SpiSpeed;
-use crate::{prepare, spi, VoltageChoice};
+use crate::{VoltageChoice, prepare, spi};
+
+use super::compare::probable_missing_erase;
 
 pub struct WriteOpts {
     pub vc: VoltageChoice,
@@ -63,8 +65,8 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
             spi::write_smart(&dev, &chip, eff_offset, &data).await?;
             println!("Written {} bytes (smart)", data.len());
         } else {
-            if opts.erase {
-                let full_chip = eff_offset == 0 && data.len() as u32 == chip.size_bytes;
+            let full_chip = eff_offset == 0 && data.len() as u32 == chip.size_bytes;
+            if opts.erase || full_chip {
                 if full_chip {
                     info!("chip erase: {} — this may take up to {}s", chip.name, chip.chip_erase_timeout_secs());
                     spi::erase_chip(&dev, &chip).await?;
@@ -83,6 +85,11 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
             let readback = spi::read(&dev, &chip, eff_offset, data.len() as u32, false).await?;
             if readback != data {
                 let diffs = data.iter().zip(readback.iter()).filter(|(a, b)| a != b).count();
+                if probable_missing_erase(&data, &readback) {
+                    bail!(
+                        "verify failed — {diffs} bytes differ; readback only has bits cleared relative to the file, so the flash was probably not erased first. Re-write with --erase --verify or --smart --verify"
+                    );
+                }
                 bail!("verify failed — {diffs} bytes differ");
             }
             println!("Verify:  OK");
