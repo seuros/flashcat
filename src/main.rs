@@ -43,14 +43,28 @@ fn parse_hex_or_dec(s: &str) -> Result<u32, String> {
 }
 
 #[derive(Parser)]
-#[command(name = "flashcat", version, about = "FlashcatUSB Pro — Linux/FreeBSD/macOS")]
+#[command(
+    name = "flashcat",
+    version,
+    about = "FlashcatUSB Pro — Linux/FreeBSD/macOS (voltage auto-detected by default)",
+    after_help = "QUICK START (sensible defaults — no global flags needed):\n  \
+                  flashcat detect\n  \
+                  flashcat read    --file dump.bin\n  \
+                  flashcat write   --file dump.bin --verify\n  \
+                  flashcat compare --file dump.bin\n\n\
+                  Override defaults only if you know you need to:\n  \
+                  --voltage  auto-probes 1v8/3v3 (default: auto)\n  \
+                  --mhz      SPI clock, default 8 MHz; raise to 16/24/32 if your wiring is clean"
+)]
 struct Cli {
-    /// SPI clock in MHz (1, 2, 4, 8, 12, 16, 24, 32)
-    #[arg(long, default_value = "8", global = true, value_parser = parse_mhz)]
+    /// SPI clock in MHz — optional; default 8 MHz works for most chips
+    #[arg(long, default_value = "8", global = true, value_parser = parse_mhz,
+          value_name = "MHZ", help = "SPI clock (1,2,4,8,12,16,24,32) — optional, default 8")]
     mhz: u8,
 
-    /// Target voltage: auto (default), 1v8, 3v3, or 5v
-    #[arg(long, default_value = "auto", global = true)]
+    /// Target voltage — optional; 'auto' probes the chip
+    #[arg(long, default_value = "auto", global = true,
+          value_name = "V", help = "Target voltage: auto|1v8|3v3|5v — optional, default auto")]
     voltage: String,
 
     #[command(subcommand)]
@@ -70,7 +84,8 @@ enum Cmd {
 
     /// Read flash to file
     Read {
-        #[arg(short, long)]
+        /// Output file (binary dump of flash contents)
+        #[arg(short, long, value_name = "FILE")]
         file: PathBuf,
         #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
         offset: u32,
@@ -90,9 +105,10 @@ enum Cmd {
         region: Option<String>,
     },
 
-    /// Write file to flash
+    /// Write file to flash (auto-detects voltage; --erase/--verify optional)
     Write {
-        #[arg(short, long)]
+        /// Input binary to flash
+        #[arg(short, long, value_name = "FILE")]
         file: PathBuf,
         #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
         offset: u32,
@@ -134,7 +150,8 @@ enum Cmd {
 
     /// Compare flash contents against a file (SHA-256 + diff report)
     Compare {
-        #[arg(short, long)]
+        /// Reference binary to compare flash against
+        #[arg(short, long, value_name = "FILE")]
         file: PathBuf,
         #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
         offset: u32,
