@@ -1,9 +1,8 @@
 use anyhow::Result;
 
 use crate::chip::ParamSource;
-use crate::fpga;
 use crate::spi::{read_wp_status, SpiSpeed};
-use crate::{prepare, VoltageChoice};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 pub async fn cmd_detect(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
     match prepare(vc, speed).await {
@@ -26,7 +25,7 @@ pub async fn cmd_detect(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
             if chip.source == ParamSource::Database {
                 eprintln!("\x1b[31m⚠ SFDP absent — possible counterfeit chip\x1b[0m");
             }
-            fpga::vcc_off(&dev).await.ok();
+            power_down_and_vcc_off(&dev).await;
             Ok(())
         }
         Err(e) if e.to_string().contains("no chip detected") => {

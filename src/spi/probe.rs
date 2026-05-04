@@ -7,6 +7,7 @@ use tracing::{info, warn};
 use crate::chip::{ParamSource, ResolvedChip};
 use crate::db::{self, ChipVoltage};
 use crate::fpga::{self, Voltage};
+use crate::power_down_and_vcc_off;
 use crate::spi::{self, detect, sfdp};
 use crate::usb::UsbDevice;
 
@@ -279,40 +280,63 @@ pub async fn auto_probe(
     let dev = crate::usb::connect().await?;
     let probe = VoltageProbe::new(());
 
+    enum Phase1Probe {
+        Found(ResolvedChip),
+        Escalate,
+    }
+
     // Phase 1: 1.8V (only on programmers that support it)
     if dev.kind.supports_voltage(Voltage::V1_8) {
         info!("auto-probe: trying 1.8V");
-        fpga::load(&dev, Voltage::V1_8).await?;
-        fpga::set_vcc(&dev, Voltage::V1_8).await?;
-        spi::init(&dev, speed).await?;
+        let phase1: Result<Phase1Probe> = async {
+            fpga::load(&dev, Voltage::V1_8).await?;
+            fpga::set_vcc(&dev, Voltage::V1_8).await?;
+            spi::init(&dev, speed).await?;
 
-        let id = detect::rdid(&dev).await?;
-        let (mfr, id1, id2) = (id[0], id[1], id[2]);
-        info!("auto-probe: 1.8V RDID = {mfr:#04x} {id1:#04x} {id2:#04x}");
+            let id = detect::rdid(&dev).await?;
+            let (mfr, id1, id2) = (id[0], id[1], id[2]);
+            info!("auto-probe: 1.8V RDID = {mfr:#04x} {id1:#04x} {id2:#04x}");
 
-        if mfr != 0xFF && mfr != 0x00 {
-            match resolve_chip(&dev, id, Voltage::V1_8).await? {
-                Resolved::Match(chip) => {
-                    info!("auto-probe: identified {} at 1.8V", chip.name);
-                    if chip.addr_bytes == 4 {
-                        detect::enter_4byte_mode(&dev).await?;
+            if mfr != 0xFF && mfr != 0x00 {
+                match resolve_chip(&dev, id, Voltage::V1_8).await? {
+                    Resolved::Match(chip) => {
+                        info!("auto-probe: identified {} at 1.8V", chip.name);
+                        if chip.addr_bytes == 4 {
+                            detect::enter_4byte_mode(&dev).await?;
+                        }
+                        return Ok(Phase1Probe::Found(chip));
                     }
-                    let _m = probe.chip_found().unwrap();
-                    return Ok((dev, Some(chip), Voltage::V1_8));
+                    Resolved::WrongVoltage(chip) => {
+                        // Known 3.3V chip responded at 1.8V — safe to escalate
+                        info!(
+                            "auto-probe: known 3.3V chip {} responded at 1.8V, escalating",
+                            chip.name
+                        );
+                    }
+                    Resolved::None => {
+                        // Unknown chip, SFDP also failed — hard stop.
+                        // Can't determine if this is a 1.8V part; escalating to 3.3V could destroy it.
+                        anyhow::bail!(
+                            "unknown chip at 1.8V (RDID {mfr:#04x} {id1:#04x} {id2:#04x}) — \
+                             no SFDP response, refusing escalation to 3.3V to protect the chip. \
+                             Use --voltage 3v3 to override explicitly."
+                        );
+                    }
                 }
-                Resolved::WrongVoltage(chip) => {
-                    // Known 3.3V chip responded at 1.8V — safe to escalate
-                    info!("auto-probe: known 3.3V chip {} responded at 1.8V, escalating", chip.name);
-                }
-                Resolved::None => {
-                    // Unknown chip, SFDP also failed — hard stop.
-                    // Can't determine if this is a 1.8V part; escalating to 3.3V could destroy it.
-                    anyhow::bail!(
-                        "unknown chip at 1.8V (RDID {mfr:#04x} {id1:#04x} {id2:#04x}) — \
-                         no SFDP response, refusing escalation to 3.3V to protect the chip. \
-                         Use --voltage 3v3 to override explicitly."
-                    );
-                }
+            }
+
+            Ok(Phase1Probe::Escalate)
+        }.await;
+
+        match phase1 {
+            Ok(Phase1Probe::Found(chip)) => {
+                let _m = probe.chip_found().unwrap();
+                return Ok((dev, Some(chip), Voltage::V1_8));
+            }
+            Ok(Phase1Probe::Escalate) => {}
+            Err(e) => {
+                power_down_and_vcc_off(&dev).await;
+                return Err(e);
             }
         }
 
@@ -327,7 +351,7 @@ pub async fn auto_probe(
 
     let probe = probe.escalate().unwrap();
 
-    // Phase 2: 3.3V — wrap in async block so any error gets vcc_off before propagating.
+    // Phase 2: 3.3V — wrap in async block so any error gets cleanup before propagating.
     info!("auto-probe: trying 3.3V");
     let phase2: anyhow::Result<Option<ResolvedChip>> = async {
         fpga::load(&dev, Voltage::V3_3).await?;
@@ -370,13 +394,13 @@ pub async fn auto_probe(
         }
         Ok(None) => {}
         Err(e) => {
-            fpga::vcc_off(&dev).await.ok();
+            power_down_and_vcc_off(&dev).await;
             return Err(e);
         }
     }
 
     let _m = probe.exhausted().unwrap();
     info!("auto-probe: no chip found at either voltage");
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     Ok((dev, None, Voltage::V3_3))
 }

@@ -1,9 +1,8 @@
 use anyhow::{bail, Result};
 
-use crate::fpga;
 use crate::spi::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
 use crate::spi::SpiSpeed;
-use crate::{prepare, VoltageChoice};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 // Manufacturers that support READ UNIQUE ID (0x4B): 4 dummy bytes + 8-byte UID
 const MFR_WINBOND:   u8 = 0xEF;
@@ -37,7 +36,7 @@ pub async fn cmd_uid(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
 
         Ok(())
     }).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }
 

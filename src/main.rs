@@ -272,10 +272,26 @@ pub(crate) async fn setup(voltage: Voltage, speed: SpiSpeed) -> Result<usb::UsbD
             dev.kind, voltage, dev.kind.supported_voltages()
         );
     }
-    fpga::load(&dev, voltage).await?;
-    fpga::set_vcc(&dev, voltage).await?;
-    spi::init(&dev, speed).await?;
+    let result: Result<()> = async {
+        fpga::load(&dev, voltage).await?;
+        fpga::set_vcc(&dev, voltage).await?;
+        spi::init(&dev, speed).await?;
+        Ok(())
+    }.await;
+    if let Err(e) = result {
+        power_down_and_vcc_off(&dev).await;
+        return Err(e);
+    }
     Ok(dev)
+}
+
+pub(crate) async fn power_down_and_vcc_off(dev: &usb::UsbDevice) {
+    if let Err(e) = spi::deep_power_down(dev).await {
+        tracing::debug!("deep_power_down before vcc_off: {e}");
+    }
+    if let Err(e) = fpga::vcc_off(dev).await {
+        tracing::debug!("vcc_off: {e}");
+    }
 }
 
 /// Unified prepare: resolve voltage (auto-probing if needed), return configured device + chip.
@@ -294,9 +310,7 @@ pub(crate) async fn prepare(
             match spi::detect(&dev, voltage).await? {
                 Some(chip) => Ok((dev, chip, voltage)),
                 None => {
-                    if let Err(e) = fpga::vcc_off(&dev).await {
-                        tracing::warn!("vcc_off after no chip: {e}");
-                    }
+                    power_down_and_vcc_off(&dev).await;
                     anyhow::bail!("no chip detected")
                 }
             }

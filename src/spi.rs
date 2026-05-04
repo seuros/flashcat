@@ -13,6 +13,7 @@ pub(crate) mod read;
 pub mod sfdp;
 mod write;
 
+pub(crate) use bus::deep_power_down;
 pub use detect::detect;
 pub use erase::{erase_chip, erase_range};
 pub use probe::auto_probe;

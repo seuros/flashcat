@@ -1,8 +1,8 @@
 use anyhow::Result;
 
-use crate::fpga::{self, Voltage};
+use crate::fpga::Voltage;
 use crate::spi::{self, SpiSpeed};
-use crate::{setup, VoltageChoice};
+use crate::{power_down_and_vcc_off, setup, VoltageChoice};
 
 pub async fn cmd_sfdp(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
     // SFDP read is passive — probe at 3.3V if auto, otherwise use explicit voltage.
@@ -34,6 +34,6 @@ pub async fn cmd_sfdp(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
         }
         Ok(())
     }).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }

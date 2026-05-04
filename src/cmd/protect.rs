@@ -1,8 +1,7 @@
 use anyhow::Result;
 
-use crate::fpga;
 use crate::spi::{self, SpiSpeed};
-use crate::{prepare, VoltageChoice};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 pub async fn cmd_protect(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
     let (dev, chip, _voltage) = prepare(vc, speed).await?;
@@ -13,7 +12,7 @@ pub async fn cmd_protect(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
         println!("Status:  {}", wp.summary());
         Ok(())
     }).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }
 
@@ -26,6 +25,6 @@ pub async fn cmd_unprotect(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
         println!("Status:  {}", wp.summary());
         Ok(())
     }).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }

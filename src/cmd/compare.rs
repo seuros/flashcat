@@ -3,9 +3,8 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 use crate::bios::layout;
-use crate::fpga;
 use crate::spi::{self, SpiSpeed};
-use crate::{VoltageChoice, prepare};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 pub struct CompareOpts {
     pub vc: VoltageChoice,
@@ -86,7 +85,7 @@ pub async fn cmd_compare(opts: CompareOpts) -> Result<()> {
         }
         anyhow::bail!("verification failed")
     }).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }
 

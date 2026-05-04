@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::bios::layout;
-use crate::fpga;
-use crate::spi::SpiSpeed;
-use crate::{VoltageChoice, prepare, spi};
+use crate::spi::{self, SpiSpeed};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 use super::compare::probable_missing_erase;
 
@@ -96,6 +95,6 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
         }
         Ok(())
     }).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }

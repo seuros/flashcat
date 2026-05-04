@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::bios::layout;
-use crate::fpga;
-use crate::spi::SpiSpeed;
-use crate::{prepare, spi, VoltageChoice};
+use crate::spi::{self, SpiSpeed};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 pub async fn cmd_erase(
     vc: VoltageChoice,
@@ -59,6 +58,6 @@ pub async fn cmd_erase(
         }
         Ok(())
     }).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }

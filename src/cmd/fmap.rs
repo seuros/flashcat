@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use crate::bios::{amd_psp, efifv, ifd, layout};
-use crate::fpga;
-use crate::spi::SpiSpeed;
-use crate::{prepare, spi, VoltageChoice};
+use crate::spi::{self, SpiSpeed};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 pub async fn cmd_fmap(
     vc: VoltageChoice,
@@ -27,7 +26,7 @@ pub async fn cmd_fmap(
             let result = spi::read(&dev, &chip, 0, actual_limit, false).await;
             let sz = chip.size_bytes;
             let name = chip.name.clone();
-            fpga::vcc_off(&dev).await.ok();
+            power_down_and_vcc_off(&dev).await;
             (result?, name, Some(sz))
         }
     };

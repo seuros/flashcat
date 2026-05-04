@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use tracing::info;
 
 use crate::bios::layout;
-use crate::fpga;
-use crate::spi::SpiSpeed;
-use crate::{prepare, spi, VoltageChoice};
+use crate::spi::{self, SpiSpeed};
+use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
 
 pub struct ReadOpts {
     pub vc: VoltageChoice,
@@ -22,7 +21,7 @@ pub struct ReadOpts {
 pub async fn cmd_read(opts: ReadOpts) -> Result<()> {
     let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
     let result = run(&dev, &chip, &opts).await;
-    fpga::vcc_off(&dev).await.ok();
+    power_down_and_vcc_off(&dev).await;
     result
 }
 
