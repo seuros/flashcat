@@ -38,13 +38,62 @@ pub async fn sqi_setup(dev: &UsbDevice, mhz: u8) -> Result<()> {
     Ok(())
 }
 
-/// Enable the Quad Enable (QE) bit in the chip's status register.
-///
-/// Sequence: RDSR (0x05) → set bit 6 → WREN (0x06) → WRSR (0x01, new_sr).
-pub async fn enable_quad(dev: &UsbDevice) -> Result<()> {
-    debug!("enabling QE bit in status register");
+const MFR_WINBOND:    u8 = 0xEF;
+const MFR_GIGADEVICE: u8 = 0xC8;
+const MFR_MICRON:     u8 = 0x20;
+const MFR_SPANSION:   u8 = 0x01;
+const MFR_ISSI:       u8 = 0x9D;
 
-    // Read current status register
+/// Enable the Quad Enable (QE) bit appropriate for the given manufacturer.
+///
+/// - Winbond / GigaDevice: QE = SR2[1], written with 0x31
+/// - Micron N25Q / MT25QL: QE = EVCR[7] (active-low), written with 0x61
+/// - Spansion S25FL: QE = CR1[1], written via 2-byte WRR (0x01 + SR1 + CR1)
+/// - ISSI IS25LP: QE = Function Register[1], written with 0x42
+/// - Macronix MX25L / EON EN25Q: QE = SR1[6], written with 0x01
+pub async fn enable_quad(dev: &UsbDevice, mfr: u8) -> Result<()> {
+    match mfr {
+        MFR_WINBOND | MFR_GIGADEVICE => enable_quad_sr2(dev).await,
+        MFR_MICRON                   => enable_quad_micron(dev).await,
+        MFR_SPANSION                 => enable_quad_spansion(dev).await,
+        MFR_ISSI                     => enable_quad_issi(dev).await,
+        _                            => enable_quad_sr1(dev).await,
+    }
+}
+
+/// W25Q / GD25Q: QE is SR2[1]. Use 0x35 to read, 0x31 to write.
+async fn enable_quad_sr2(dev: &UsbDevice) -> Result<()> {
+    debug!("enabling QE via SR2[1] (Winbond/GigaDevice path)");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x35]).await?; // RDSR2
+    let sr2_bytes = spibus_read(dev, 1).await?;
+    ss_disable(dev).await?;
+
+    let sr2 = sr2_bytes.first().copied().unwrap_or(0);
+    if sr2 & 0x02 != 0 {
+        debug!("QE already set (SR2={sr2:#04x}), skipping");
+        return Ok(());
+    }
+
+    let new_sr2 = sr2 | 0x02;
+    debug!("SR2 before={sr2:#04x} after={new_sr2:#04x}");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x06]).await?; // WREN
+    ss_disable(dev).await?;
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x31, new_sr2]).await?; // WRSR2
+    ss_disable(dev).await?;
+
+    poll_wip(dev, "WRSR2").await
+}
+
+/// Macronix and others: QE is SR1[6]. Use 0x05 to read, 0x01 to write.
+async fn enable_quad_sr1(dev: &UsbDevice) -> Result<()> {
+    debug!("enabling QE via SR1[6] (generic path)");
+
     ss_enable(dev).await?;
     spibus_write(dev, &[0x05]).await?; // RDSR
     let sr_bytes = spibus_read(dev, 1).await?;
@@ -52,24 +101,123 @@ pub async fn enable_quad(dev: &UsbDevice) -> Result<()> {
 
     let sr = sr_bytes.first().copied().unwrap_or(0);
     if sr & 0x40 != 0 {
-        debug!("QE bit already set (SR={sr:#04x}), skipping");
+        debug!("QE already set (SR={sr:#04x}), skipping");
         return Ok(());
     }
 
     let new_sr = sr | 0x40;
     debug!("SR before={sr:#04x} after={new_sr:#04x}");
 
-    // Write enable
     ss_enable(dev).await?;
     spibus_write(dev, &[0x06]).await?; // WREN
     ss_disable(dev).await?;
 
-    // Write status register with QE bit set
     ss_enable(dev).await?;
     spibus_write(dev, &[0x01, new_sr]).await?; // WRSR
     ss_disable(dev).await?;
 
-    // Poll WIP until write completes (SR write can take ~15 ms)
+    poll_wip(dev, "WRSR").await
+}
+
+/// Micron N25Q / MT25QL: QE is EVCR[7], active-low (0 = quad enabled).
+/// Read with 0x65 (RDEVCR), write with 0x61 (WEVCR). Volatile — no erase cycle.
+async fn enable_quad_micron(dev: &UsbDevice) -> Result<()> {
+    debug!("enabling QE via EVCR[7] (Micron path)");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x65]).await?; // RDEVCR
+    let evcr_bytes = spibus_read(dev, 1).await?;
+    ss_disable(dev).await?;
+
+    let evcr = evcr_bytes.first().copied().unwrap_or(0xFF);
+    if evcr & 0x80 == 0 {
+        debug!("EVCR quad already enabled (EVCR={evcr:#04x}), skipping");
+        return Ok(());
+    }
+
+    let new_evcr = evcr & !0x80;
+    debug!("EVCR before={evcr:#04x} after={new_evcr:#04x}");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x06]).await?; // WREN
+    ss_disable(dev).await?;
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x61, new_evcr]).await?; // WEVCR
+    ss_disable(dev).await?;
+
+    poll_wip(dev, "WEVCR").await
+}
+
+/// Spansion S25FL: QE is CR1[1]. WRR (0x01) takes SR1 + CR1 as two bytes.
+/// Read SR1 with 0x05, read CR1 with 0x35, write both atomically with 0x01.
+async fn enable_quad_spansion(dev: &UsbDevice) -> Result<()> {
+    debug!("enabling QE via CR1[1] (Spansion path)");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x05]).await?; // RDSR1
+    let sr1_bytes = spibus_read(dev, 1).await?;
+    ss_disable(dev).await?;
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x35]).await?; // RDCR1
+    let cr1_bytes = spibus_read(dev, 1).await?;
+    ss_disable(dev).await?;
+
+    let sr1 = sr1_bytes.first().copied().unwrap_or(0);
+    let cr1 = cr1_bytes.first().copied().unwrap_or(0);
+
+    if cr1 & 0x02 != 0 {
+        debug!("QE already set (CR1={cr1:#04x}), skipping");
+        return Ok(());
+    }
+
+    let new_cr1 = cr1 | 0x02;
+    debug!("CR1 before={cr1:#04x} after={new_cr1:#04x}");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x06]).await?; // WREN
+    ss_disable(dev).await?;
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x01, sr1, new_cr1]).await?; // WRR: SR1 + CR1
+    ss_disable(dev).await?;
+
+    poll_wip(dev, "WRR").await
+}
+
+/// ISSI IS25LP: QE is Function Register[1].
+/// Read with 0x48 (RDFR), write with 0x42 (WRFR).
+async fn enable_quad_issi(dev: &UsbDevice) -> Result<()> {
+    debug!("enabling QE via FR[1] (ISSI path)");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x48]).await?; // RDFR
+    let fr_bytes = spibus_read(dev, 1).await?;
+    ss_disable(dev).await?;
+
+    let fr = fr_bytes.first().copied().unwrap_or(0);
+    if fr & 0x02 != 0 {
+        debug!("QE already set (FR={fr:#04x}), skipping");
+        return Ok(());
+    }
+
+    let new_fr = fr | 0x02;
+    debug!("FR before={fr:#04x} after={new_fr:#04x}");
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x06]).await?; // WREN
+    ss_disable(dev).await?;
+
+    ss_enable(dev).await?;
+    spibus_write(dev, &[0x42, new_fr]).await?; // WRFR
+    ss_disable(dev).await?;
+
+    poll_wip(dev, "WRFR").await
+}
+
+/// Poll SR1 WIP bit until the register write completes (up to ~250 ms).
+async fn poll_wip(dev: &UsbDevice, op: &str) -> Result<()> {
     for _ in 0..50 {
         tokio::time::sleep(Duration::from_millis(5)).await;
         ss_enable(dev).await?;
@@ -77,12 +225,11 @@ pub async fn enable_quad(dev: &UsbDevice) -> Result<()> {
         let poll = spibus_read(dev, 1).await?;
         ss_disable(dev).await?;
         if poll.first().map(|b| b & 0x01).unwrap_or(1) == 0 {
-            debug!("QE bit enabled (SR={:#04x})", poll[0]);
+            debug!("QE enabled after {op}");
             return Ok(());
         }
     }
-
-    bail!("timeout waiting for WRSR to complete");
+    bail!("timeout waiting for {op} to complete");
 }
 
 /// Read `length` bytes starting at `offset` using the SQI Quad Output Fast Read path.

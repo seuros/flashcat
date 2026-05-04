@@ -70,7 +70,7 @@ async fn run(
 
     let data = if opts.quad {
         info!("quad SPI mode: enabling QE bit and using SqiRdFlash");
-        spi::enable_quad(dev).await?;
+        spi::enable_quad(dev, chip.mfr).await?;
         spi::sqi_setup(dev, opts.speed.0).await?;
         spi::read_quad(dev, chip, eff_offset, len).await?
     } else {
