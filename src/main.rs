@@ -178,6 +178,12 @@ enum Cmd {
     /// Read the chip's unique 64-bit serial number
     Uid,
 
+    /// Protect entire chip (sets BP=all, survives power cycle)
+    Protect,
+
+    /// Remove all write protection (clears BP bits)
+    Unprotect,
+
     /// Parse a layout file and list regions (no hardware required)
     Regions {
         #[arg(short, long)]
@@ -252,6 +258,8 @@ async fn main() -> Result<()> {
         }
         Cmd::Fmap { scan_limit, file } => cmd::cmd_fmap(vc, speed, *scan_limit, file.clone()).await,
         Cmd::Uid => cmd::cmd_uid(vc, speed).await,
+        Cmd::Protect => cmd::cmd_protect(vc, speed).await,
+        Cmd::Unprotect => cmd::cmd_unprotect(vc, speed).await,
         Cmd::Regions { file } => cmd::cmd_regions(file.clone()).await,
     }
 }
