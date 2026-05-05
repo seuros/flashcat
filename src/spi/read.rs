@@ -13,7 +13,8 @@ pub async fn read(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, length: u32
     let mut pb = Progress::new("Reading", length as u64);
     let mut out = Vec::with_capacity(length as usize);
     let mut addr = offset;
-    let end = offset + length;
+    let end = offset.checked_add(length)
+        .ok_or_else(|| anyhow::anyhow!("read range overflows u32: offset={offset:#x} length={length:#x}"))?;
 
     while addr < end {
         let block = BLOCK_SIZE.min(end - addr);

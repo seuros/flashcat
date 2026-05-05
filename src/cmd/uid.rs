@@ -43,8 +43,14 @@ pub async fn cmd_uid(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
 /// READ UNIQUE ID: opcode 0x4B + 4 dummy bytes + 8-byte UID (Winbond/GigaDevice/ISSI/Eon)
 async fn read_uid_4b(dev: &crate::usb::UsbDevice) -> Result<Vec<u8>> {
     ss_enable(dev).await?;
-    spibus_write(dev, &[0x4B, 0x00, 0x00, 0x00, 0x00]).await?;
-    let uid = spibus_read(dev, 8).await?;
-    ss_disable(dev).await?;
+    let wr = spibus_write(dev, &[0x4B, 0x00, 0x00, 0x00, 0x00]).await;
+    let rd = spibus_read(dev, 8).await;
+    let dis = ss_disable(dev).await;
+    wr?;
+    let uid = rd?;
+    dis?;
+    if uid.len() != 8 {
+        anyhow::bail!("UID read returned {} bytes, expected 8", uid.len());
+    }
     Ok(uid)
 }

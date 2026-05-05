@@ -118,9 +118,25 @@ async fn resolve_chip(
             let voltages_agree = matches.windows(2).all(|w| w[0].voltage == w[1].voltage);
 
             if voltages_agree {
-                // All candidates have the same voltage; pick the first.
-                let db_chip = matches[0];
-                if voltage_matches_chip(voltage, db_chip.voltage) {
+                // All candidates share the same voltage; filter to voltage-matching ones first.
+                let voltage_matches: Vec<_> = matches
+                    .iter()
+                    .filter(|c| voltage_matches_chip(voltage, c.voltage))
+                    .collect();
+
+                if voltage_matches.is_empty() {
+                    // No candidate matches this voltage level.
+                    return Ok(Resolved::WrongVoltage(db_chip_to_resolved(matches[0])));
+                }
+
+                // Check whether all voltage-matching candidates agree on size.
+                let all_same_size = voltage_matches
+                    .windows(2)
+                    .all(|w| w[0].size_bytes == w[1].size_bytes);
+
+                if all_same_size {
+                    // Sizes agree — use SFDP to enrich geometry, or fall back to DB.
+                    let db_chip = voltage_matches[0];
                     let chip = match sfdp::try_read_sfdp(dev).await {
                         Some(sfdp_info) => sfdp::merge_db_with_sfdp(db_chip, &sfdp_info),
                         None => {
@@ -134,7 +150,52 @@ async fn resolve_chip(
                     };
                     Ok(Resolved::Match(chip))
                 } else {
-                    Ok(Resolved::WrongVoltage(db_chip_to_resolved(db_chip)))
+                    // Same voltage, different sizes — must use SFDP to pick the right one.
+                    warn!(
+                        "RDID {mfr:#04x}:{id1:#04x}:{id2:#04x} matches {} DB entries with \
+                         different sizes — trying SFDP to disambiguate",
+                        voltage_matches.len()
+                    );
+                    match sfdp::try_read_sfdp(dev).await {
+                        Some(sfdp_info) => {
+                            let sfdp_size = sfdp_info.size_bytes;
+                            if let Some(candidate) =
+                                voltage_matches.iter().find(|c| c.size_bytes == sfdp_size)
+                            {
+                                // SFDP size uniquely identifies one candidate.
+                                info!(
+                                    "auto-probe: size ambiguity resolved via SFDP ({} bytes) → {}",
+                                    sfdp_size, candidate.name
+                                );
+                                let mut chip = sfdp::merge_db_with_sfdp(candidate, &sfdp_info);
+                                chip.source = ParamSource::DatabaseWithSfdp;
+                                Ok(Resolved::Match(chip))
+                            } else {
+                                // SFDP size doesn't match any DB candidate — trust SFDP directly.
+                                warn!(
+                                    "SFDP size {} bytes matches no DB candidate for \
+                                     RDID {mfr:#04x}:{id1:#04x}:{id2:#04x} — using SFDP-only params",
+                                    sfdp_size
+                                );
+                                let chip = sfdp::sfdp_to_resolved(&sfdp_info, rdid, voltage);
+                                Ok(Resolved::Match(chip))
+                            }
+                        }
+                        None => {
+                            // No SFDP available — pick the smallest candidate (conservative).
+                            let smallest = voltage_matches
+                                .iter()
+                                .min_by_key(|c| c.size_bytes)
+                                .unwrap();
+                            warn!(
+                                "SFDP unavailable for ambiguous RDID {mfr:#04x}:{id1:#04x}:{id2:#04x} \
+                                 — using smallest match: {} ({} bytes). \
+                                 Use `sfdp` command for disambiguation.",
+                                smallest.name, smallest.size_bytes
+                            );
+                            Ok(Resolved::Match(db_chip_to_resolved(smallest)))
+                        }
+                    }
                 }
             } else {
                 // Candidates disagree on voltage — try SFDP size to disambiguate.
@@ -239,14 +300,41 @@ pub(crate) fn db_chip_to_resolved_pub(db: &'static crate::db::SpiNorDef) -> Reso
 }
 
 fn db_chip_to_resolved(db: &'static crate::db::SpiNorDef) -> ResolvedChip {
-    let erase_types = vec![crate::chip::EraseType {
-        size_bytes: db.erase_size,
-        opcode: if db.addr_bytes == 4 {
-            if db.erase_size <= 4096 { 0x21 } else { 0xDC }
-        } else {
-            if db.erase_size <= 4096 { 0x20 } else { 0xD8 }
-        },
-    }];
+    // Manufacturers confirmed by datasheet to support 0x52 (32KB Block Erase) and
+    // 0xD8 (64KB Block Erase) for all their 3-byte 4KB-granularity parts in our DB.
+    // Any manufacturer not listed here gets only the 4KB entry as a safe fallback;
+    // unknown future entries must not silently inherit 32K/64K erase support.
+    const FAMILIES_WITH_STANDARD_BLOCK_ERASE: &[u8] = &[
+        0xEF, // Winbond W25Q (JV/BV/FW series)
+        0xC8, // GigaDevice GD25Q/GD25LQ
+        0xC2, // Macronix MX25L
+        0x20, // Micron N25Q / ST
+        0x9D, // ISSI IS25LP
+        0x1C, // EON EN25QH/EN25Q
+        0x01, // Spansion / Cypress / Infineon S25FL
+        0xBF, // SST / Microchip SST25VF
+    ];
+
+    let erase_types = if db.erase_size <= 4096
+        && db.addr_bytes == 3
+        && FAMILIES_WITH_STANDARD_BLOCK_ERASE.contains(&db.mfr)
+    {
+        vec![
+            crate::chip::EraseType { size_bytes: 4096,  opcode: 0x20 },
+            crate::chip::EraseType { size_bytes: 32768, opcode: 0x52 },
+            crate::chip::EraseType { size_bytes: 65536, opcode: 0xD8 },
+        ]
+    } else {
+        // 4-byte chips, 64KB-unit chips, or unknown manufacturer: single safe entry.
+        vec![crate::chip::EraseType {
+            size_bytes: db.erase_size,
+            opcode: if db.addr_bytes == 4 {
+                if db.erase_size <= 4096 { 0x21 } else { 0xDC }
+            } else {
+                if db.erase_size <= 4096 { 0x20 } else { 0xD8 }
+            },
+        }]
+    };
 
     ResolvedChip {
         name: db.name.clone(),
@@ -293,7 +381,12 @@ pub async fn auto_probe(
             fpga::set_vcc(&dev, Voltage::V1_8).await?;
             spi::init(&dev, speed).await?;
 
-            let id = detect::rdid(&dev).await?;
+            let mut id = detect::rdid(&dev).await?;
+            if id[0] == 0xFF || id[0] == 0x00 {
+                tracing::debug!("RDID blank ({:#04x}) at {:?}, attempting software reset", id[0], Voltage::V1_8);
+                detect::software_reset(&dev).await?;
+                id = detect::rdid(&dev).await?;
+            }
             let (mfr, id1, id2) = (id[0], id[1], id[2]);
             info!("auto-probe: 1.8V RDID = {mfr:#04x} {id1:#04x} {id2:#04x}");
 
@@ -330,7 +423,7 @@ pub async fn auto_probe(
 
         match phase1 {
             Ok(Phase1Probe::Found(chip)) => {
-                let _m = probe.chip_found().unwrap();
+                let _m = probe.chip_found().map_err(|_| anyhow::anyhow!("probe state machine error: unexpected chip_found transition"))?;
                 return Ok((dev, Some(chip), Voltage::V1_8));
             }
             Ok(Phase1Probe::Escalate) => {}
@@ -349,7 +442,7 @@ pub async fn auto_probe(
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     }
 
-    let probe = probe.escalate().unwrap();
+    let probe = probe.escalate().map_err(|_| anyhow::anyhow!("probe state machine error: unexpected escalate transition"))?;
 
     // Phase 2: 3.3V — wrap in async block so any error gets cleanup before propagating.
     info!("auto-probe: trying 3.3V");
@@ -358,7 +451,12 @@ pub async fn auto_probe(
         fpga::set_vcc(&dev, Voltage::V3_3).await?;
         spi::init(&dev, speed).await?;
 
-        let id = detect::rdid(&dev).await?;
+        let mut id = detect::rdid(&dev).await?;
+        if id[0] == 0xFF || id[0] == 0x00 {
+            tracing::debug!("RDID blank ({:#04x}) at {:?}, attempting software reset", id[0], Voltage::V3_3);
+            detect::software_reset(&dev).await?;
+            id = detect::rdid(&dev).await?;
+        }
         let (mfr, id1, id2) = (id[0], id[1], id[2]);
         info!("auto-probe: 3.3V RDID = {mfr:#04x} {id1:#04x} {id2:#04x}");
         let _ = (id1, id2); // used in log above; id array used below
@@ -389,7 +487,7 @@ pub async fn auto_probe(
 
     match phase2 {
         Ok(Some(chip)) => {
-            let _m = probe.chip_found().unwrap();
+            let _m = probe.chip_found().map_err(|_| anyhow::anyhow!("probe state machine error: unexpected chip_found transition"))?;
             return Ok((dev, Some(chip), Voltage::V3_3));
         }
         Ok(None) => {}
@@ -399,7 +497,7 @@ pub async fn auto_probe(
         }
     }
 
-    let _m = probe.exhausted().unwrap();
+    let _m = probe.exhausted().map_err(|_| anyhow::anyhow!("probe state machine error: unexpected exhausted transition"))?;
     info!("auto-probe: no chip found at either voltage");
     power_down_and_vcc_off(&dev).await;
     Ok((dev, None, Voltage::V3_3))

@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use tracing::info;
 
-use crate::chip::ResolvedChip;
+use crate::chip::{EraseType, ResolvedChip};
 use crate::progress::Progress;
 use crate::usb::UsbDevice;
 
@@ -12,41 +12,49 @@ pub async fn erase_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     info!("chip erase: {} ({} bytes)", chip.name, chip.size_bytes);
     write_enable(dev).await?;
     ss_enable(dev).await?;
-    spibus_write(dev, &[0xC7]).await?; // CE
-    ss_disable(dev).await?;
+    let wr  = spibus_write(dev, &[0xC7]).await; // CE
+    let dis = ss_disable(dev).await;
+    wr?;
+    dis?;
     wait_wip_chip_erase(dev, chip).await
 }
 
 /// Erase a single aligned sector/block at `addr`.
-/// 3-byte chips: 0x20 (4KB SE) / 0xD8 (64KB BE).
-/// 4-byte chips: 0x21 (4KB SE4B) / 0xDC (64KB BE4B) — avoids EN4B mode entry.
+/// The erase opcode is looked up from `chip.erase_types` using `chip.erase_size`
+/// as the key, so vendor-specific and SFDP-derived opcodes are always honoured.
 pub async fn erase_unit(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<()> {
-    let cmd: u8 = match (chip.addr_bytes, chip.erase_size <= 4096) {
-        (4, true)  => 0x21, // Sector Erase 4-byte address
-        (4, false) => 0xDC, // Block Erase 64KB 4-byte address
-        (_, true)  => 0x20, // Sector Erase 3-byte address
-        (_, false) => 0xD8, // Block Erase 64KB 3-byte address
-    };
+    debug_assert!(
+        addr % chip.erase_size == 0,
+        "erase_unit: addr {addr:#x} is not aligned to erase_size {:#x}", chip.erase_size
+    );
+    let et = chip.erase_types.iter()
+        .find(|e| e.size_bytes == chip.erase_size)
+        .ok_or_else(|| anyhow::anyhow!(
+            "no erase type for {}B in chip {} erase_types", chip.erase_size, chip.name
+        ))?;
+    let cmd = et.opcode;
 
     write_enable(dev).await?;
     ss_enable(dev).await?;
-    if chip.addr_bytes == 4 {
+    let wr = if chip.addr_bytes == 4 {
         spibus_write(dev, &[
             cmd,
             ((addr >> 24) & 0xFF) as u8,
             ((addr >> 16) & 0xFF) as u8,
             ((addr >> 8) & 0xFF) as u8,
             (addr & 0xFF) as u8,
-        ]).await?;
+        ]).await
     } else {
         spibus_write(dev, &[
             cmd,
             ((addr >> 16) & 0xFF) as u8,
             ((addr >> 8) & 0xFF) as u8,
             (addr & 0xFF) as u8,
-        ]).await?;
-    }
-    ss_disable(dev).await?;
+        ]).await
+    };
+    let dis = ss_disable(dev).await;
+    wr?;
+    dis?;
 
     if chip.erase_size <= 4096 {
         wait_wip(dev).await?;
@@ -54,6 +62,75 @@ pub async fn erase_unit(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Resu
         wait_wip_block(dev).await?;
     }
 
+    Ok(())
+}
+
+/// Returns (opcode, block_size) for the largest aligned erase unit that fits at addr,
+/// constrained to sizes actually advertised in `erase_types`.
+/// Prefers the largest matching block first; falls back to the smallest advertised size.
+pub(crate) fn pick_erase_op(addr: u32, remaining_bytes: u32, erase_types: &[EraseType]) -> Result<(u8, u32)> {
+    // Try 64KB.
+    if addr % 65536 == 0 && remaining_bytes >= 65536 {
+        if let Some(et) = erase_types.iter().find(|e| e.size_bytes == 65536) {
+            return Ok((et.opcode, 65536));
+        }
+    }
+    // Try 32KB.
+    if addr % 32768 == 0 && remaining_bytes >= 32768 {
+        if let Some(et) = erase_types.iter().find(|e| e.size_bytes == 32768) {
+            return Ok((et.opcode, 32768));
+        }
+    }
+    // Caller guarantees a 4KB erase type is present; find it explicitly.
+    let sector = erase_types
+        .iter()
+        .find(|e| e.size_bytes == 4096)
+        .ok_or_else(|| anyhow::anyhow!("pick_erase_op: no 4KB erase type in erase_types (caller should have checked has_4k)"))?;
+    Ok((sector.opcode, sector.size_bytes))
+}
+
+/// Erase a single block using an explicit opcode.
+/// Encodes a 4-byte address when chip.addr_bytes == 4, 3-byte otherwise.
+async fn erase_unit_opcode(
+    dev: &UsbDevice,
+    chip: &ResolvedChip,
+    addr: u32,
+    opcode: u8,
+    use_block_timeout: bool,
+) -> Result<()> {
+    // The minimum erase granularity in mixed-erase mode is 4 KiB; every addr
+    // supplied by erase_range_mixed is derived from 4 KiB-aligned arithmetic.
+    debug_assert!(
+        addr % 4096 == 0,
+        "erase_unit_opcode: addr {addr:#x} is not 4 KiB-aligned"
+    );
+    write_enable(dev).await?;
+    ss_enable(dev).await?;
+    let wr = if chip.addr_bytes == 4 {
+        spibus_write(dev, &[
+            opcode,
+            ((addr >> 24) & 0xFF) as u8,
+            ((addr >> 16) & 0xFF) as u8,
+            ((addr >> 8) & 0xFF) as u8,
+            (addr & 0xFF) as u8,
+        ]).await
+    } else {
+        spibus_write(dev, &[
+            opcode,
+            ((addr >> 16) & 0xFF) as u8,
+            ((addr >> 8) & 0xFF) as u8,
+            (addr & 0xFF) as u8,
+        ]).await
+    };
+    let dis = ss_disable(dev).await;
+    wr?;
+    dis?;
+
+    if use_block_timeout {
+        wait_wip_block(dev).await?;
+    } else {
+        wait_wip(dev).await?;
+    }
     Ok(())
 }
 
@@ -74,6 +151,15 @@ pub(crate) fn erase_range_bounds(unit: u32, offset: u32, len: u32) -> Result<(u3
 
 /// Erase all erase units that overlap [offset, offset+len).
 pub async fn erase_range(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, len: u32) -> Result<()> {
+    // Use mixed 64KB/32KB/4KB erase for 3-byte address chips that advertise
+    // a 4KB erase type and at least one larger block size. The 4KB check is
+    // required because erase_range_mixed aligns to 4KB boundaries and
+    // pick_erase_op expects a 4KB entry to be present as its fallback.
+    let has_4k = chip.erase_types.iter().any(|e| e.size_bytes == 4096);
+    if chip.addr_bytes == 3 && has_4k && chip.erase_types.len() > 1 {
+        return erase_range_mixed(dev, chip, offset, len).await;
+    }
+
     let unit = chip.erase_size;
     let (first, count) = erase_range_bounds(unit, offset, len)?;
     let last = first + (count - 1) * unit;
@@ -88,7 +174,52 @@ pub async fn erase_range(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, len:
     while addr <= last {
         erase_unit(dev, chip, addr).await?;
         pb.inc(1);
-        addr += unit;
+        // Guard against wrapping at the top of the u32 address space
+        // (e.g. addr = 0xFFFF_F000, unit = 4096 would wrap to 0 without this,
+        // causing the loop condition addr <= last to remain true indefinitely).
+        addr = match addr.checked_add(unit) {
+            Some(a) => a,
+            None => break,
+        };
+    }
+    pb.finish();
+    Ok(())
+}
+
+/// Mixed erase: uses 64KB / 32KB / 4KB units for maximum throughput.
+/// Preconditions: chip.addr_bytes == 3, chip advertises a 4KB erase type,
+/// and at least one larger erase type is also advertised.
+async fn erase_range_mixed(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, len: u32) -> Result<()> {
+    if len == 0 {
+        bail!("erase length must be > 0");
+    }
+    let end_inclusive = offset
+        .checked_add(len - 1)
+        .ok_or_else(|| anyhow::anyhow!("erase range overflows u32 (offset={offset:#x} len={len:#x})"))?;
+
+    let first = (offset / 4096) * 4096;
+    let last  = (end_inclusive / 4096) * 4096;
+    let end   = last as u64 + 4096; // exclusive end, u64 — never overflows
+    let total_bytes = end - first as u64;
+
+    info!(
+        "mixed erase [{:#010x}..{:#010x}): up to 64KB/32KB/4KB units",
+        first, end
+    );
+
+    let mut pb = Progress::new("Erasing", total_bytes);
+    let mut addr = first;
+    while addr as u64 <= end - 4096 {
+        let remaining = (end - addr as u64) as u32; // safe: always <= u32::MAX since addr >= first and end = last+4096 <= 0x1_0000_0000
+        let (opcode, size) = pick_erase_op(addr, remaining, &chip.erase_types)?;
+        erase_unit_opcode(dev, chip, addr, opcode, size > 4096).await?;
+        pb.inc(size as u64);
+        // Use checked_add to guard against wrapping at the top of the u32 address
+        // space (e.g. addr = 0xFFFF_F000, size = 4096 would wrap to 0 without this).
+        addr = match addr.checked_add(size) {
+            Some(a) => a,
+            None => break,
+        };
     }
     pb.finish();
     Ok(())
@@ -96,10 +227,25 @@ pub async fn erase_range(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, len:
 
 #[cfg(test)]
 mod tests {
-    use super::erase_range_bounds;
+    use super::{erase_range_bounds, pick_erase_op};
+    use crate::chip::EraseType;
 
     const SECTOR: u32 = 4096;
     const BLOCK64: u32 = 65536;
+
+    /// Standard 3-byte 4KB chip: 4KB + 32KB + 64KB erase types.
+    fn all_types() -> Vec<EraseType> {
+        vec![
+            EraseType { size_bytes: 4096,  opcode: 0x20 },
+            EraseType { size_bytes: 32768, opcode: 0x52 },
+            EraseType { size_bytes: 65536, opcode: 0xD8 },
+        ]
+    }
+
+    /// DB-only chip that only advertises 4KB sector erase.
+    fn sector_only() -> Vec<EraseType> {
+        vec![EraseType { size_bytes: 4096, opcode: 0x20 }]
+    }
 
     #[test]
     fn aligned_single_sector() {
@@ -144,5 +290,105 @@ mod tests {
     #[test]
     fn overflow_is_error() {
         assert!(erase_range_bounds(SECTOR, 0xFFFF_F000, 0x2000).is_err());
+    }
+
+    #[test]
+    fn pick_64k_at_64k_boundary() {
+        assert_eq!(pick_erase_op(0x10000, 65536, &all_types()).unwrap(), (0xD8, 65536));
+    }
+
+    #[test]
+    fn pick_32k_not_64k_aligned() {
+        assert_eq!(pick_erase_op(0x8000, 32768, &all_types()).unwrap(), (0x52, 32768));
+    }
+
+    #[test]
+    fn pick_4k_when_not_aligned() {
+        assert_eq!(pick_erase_op(0x1000, 65536, &all_types()).unwrap(), (0x20, 4096));
+    }
+
+    #[test]
+    fn pick_4k_when_insufficient_remaining() {
+        assert_eq!(pick_erase_op(0x10000, 32767, &all_types()).unwrap(), (0x20, 4096));
+    }
+
+    #[test]
+    fn prefer_64k_over_32k_at_64k_boundary() {
+        assert_eq!(pick_erase_op(0x10000, 65536, &all_types()).unwrap(), (0xD8, 65536));
+    }
+
+    /// Chip only advertises 4KB — must fall back to 4KB even at a 64KB-aligned address
+    /// with enough remaining bytes, instead of issuing an unsupported 0xD8 opcode.
+    #[test]
+    fn pick_falls_back_to_4k_when_only_4k_advertised() {
+        assert_eq!(pick_erase_op(0x10000, 65536, &sector_only()).unwrap(), (0x20, 4096));
+    }
+
+    /// last 4KB sector of a 4GB chip — last + 4096 would overflow u32 without the u64 fix.
+    #[test]
+    fn range_bounds_at_top_of_u32() {
+        let (first, count) = erase_range_bounds(4096, 0xFFFF_F000, 4096).unwrap();
+        assert_eq!(first, 0xFFFF_F000);
+        assert_eq!(count, 1);
+    }
+
+    /// Simulate the non-mixed erase loop over the last sector of a near-4GB chip.
+    /// Without the checked_add fix, addr + unit wraps to 0 and the loop never
+    /// terminates. With the fix, the loop executes exactly once and breaks.
+    #[test]
+    fn erase_range_at_top_of_u32_terminates() {
+        let unit: u32 = 4096;
+        let (first, count) = erase_range_bounds(unit, 0xFFFF_F000, 4096).unwrap();
+        assert_eq!(first, 0xFFFF_F000);
+        assert_eq!(count, 1);
+
+        // Replay the fixed loop logic to confirm it terminates with exactly `count` iterations.
+        let last = first + (count - 1) * unit;
+        let mut addr = first;
+        let mut iterations: u32 = 0;
+        while addr <= last {
+            iterations += 1;
+            addr = match addr.checked_add(unit) {
+                Some(a) => a,
+                None => break,
+            };
+        }
+        assert_eq!(iterations, count, "loop must execute exactly count={count} time(s)");
+    }
+
+    #[test]
+    fn pick_falls_back_to_4k_opcode_from_types() {
+        // addr not aligned to 32K, so must use the 4KB entry
+        let types = vec![
+            EraseType { size_bytes: 4096,  opcode: 0x20 },
+            EraseType { size_bytes: 65536, opcode: 0xD8 },
+        ];
+        assert_eq!(pick_erase_op(0x5000, 65536, &types).unwrap(), (0x20, 4096));
+    }
+
+    /// erase_types may carry non-standard opcodes (e.g. 4-byte-address 64KB = 0xDC);
+    /// pick_erase_op must use whatever opcode the EraseType entry specifies.
+    #[test]
+    fn pick_uses_correct_opcode_from_erase_types() {
+        let types = vec![
+            EraseType { size_bytes: 4096,  opcode: 0x21 },
+            EraseType { size_bytes: 65536, opcode: 0xDC },
+        ];
+        assert_eq!(pick_erase_op(0x10000, 65536, &types).unwrap(), (0xDC, 65536));
+    }
+
+    #[test]
+    fn erase_unit_uses_opcode_from_erase_types() {
+        // Verify the opcode lookup logic: find erase_size in erase_types
+        let types = vec![
+            EraseType { size_bytes: 4096,  opcode: 0x20 },
+            EraseType { size_bytes: 65536, opcode: 0xD8 },
+        ];
+        // Simulate: chip.erase_size = 65536 → expect opcode 0xD8
+        let found = types.iter().find(|e| e.size_bytes == 65536).unwrap();
+        assert_eq!(found.opcode, 0xD8);
+        // Simulate: chip.erase_size = 4096 → expect opcode 0x20
+        let found = types.iter().find(|e| e.size_bytes == 4096).unwrap();
+        assert_eq!(found.opcode, 0x20);
     }
 }

@@ -23,8 +23,8 @@ async fn soft_reset(dev: &UsbDevice) {
         ss_disable(dev).await?;
         anyhow::Ok(())
     }.await;
-    // 30 µs recovery per JESD216 spec
-    tokio::time::sleep(std::time::Duration::from_micros(30)).await;
+    // 10ms recovery — covers SST26VF tRST requirement (30µs per JESD216 is insufficient)
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 }
 
 /// Raw SFDP read: opcode 0x5A + 3-byte addr + 1 dummy byte.
@@ -117,14 +117,23 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
 
     // DW2: flash memory density
     let dw2 = dw(1);
-    let size_bytes = if (dw2 >> 31) & 1 == 1 {
-        // density field is 2^N bits
+    let size_bytes: u32 = if (dw2 >> 31) & 1 == 1 {
+        // density field is 2^N bits; N is the exponent for the bit count
         let n = dw2 & 0x7FFF_FFFF;
         if n < 3 { bail!("SFDP density exponent {n} too small") }
-        1u32 << (n - 3) // bits → bytes
+        // shift in u64 to avoid overflow when n >= 35 (1u32 << 32+ panics/wraps)
+        let size_bytes_u64: u64 = 1u64 << (n as u64 - 3); // bits → bytes
+        if size_bytes_u64 > u32::MAX as u64 {
+            bail!("SFDP reports chip size > 4GB ({size_bytes_u64} bytes): unsupported");
+        }
+        size_bytes_u64 as u32
     } else {
-        // density field is N bits (N+1 bits total)
-        (dw2 + 1) / 8
+        // density field is (N+1) bits total; guard against all-ones corrupted word
+        if dw2 == 0xFFFF_FFFF {
+            bail!("SFDP density word is all-ones (corrupted or unprogrammed flash)");
+        }
+        // dw2+1 is safe now: dw2 <= 0xFFFF_FFFE so dw2+1 <= 0xFFFF_FFFF fits u32
+        ((dw2 as u64 + 1) / 8) as u32
     };
 
     // DW8/DW9 (indices 7,8): erase types 1-4.
@@ -135,7 +144,7 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
             let word = dw(dw_idx);
             let exp    = (word >> shift) & 0xFF ;
             let opcode = ((word >> (shift + 8)) & 0xFF) as u8;
-            if opcode != 0x00 && exp != 0 {
+            if opcode != 0x00 && exp != 0 && exp < 32 {
                 erase_types.push(EraseType {
                     opcode,
                     size_bytes: 1u32 << exp,
@@ -149,7 +158,14 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
     let (page_size, chip_erase_typ_ms) = if t.len() >= 44 {
         let dw11 = dw(10);
         let ps_exp = (dw11 >> 4) & 0x0F;
-        let page_size = if ps_exp > 0 { 1u32 << ps_exp } else { 256 };
+        let page_size = match ps_exp {
+            0 => 256,            // not specified, use default
+            1..=9 => 1u32 << ps_exp,  // 2..512 bytes — plausible range
+            _ => {
+                tracing::warn!("SFDP reports implausible page size exponent {ps_exp}, defaulting to 256");
+                256
+            }
+        };
 
         let count = ((dw11 >> 24) & 0x1F) as u64;
         let unit_ms: u64 = match (dw11 >> 29) & 0x03 {
@@ -158,8 +174,12 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
             2 => 4_000,
             _ => 64_000,
         };
-        // (count + 1) * unit_ms is always >= 16ms — always Some
-        let chip_erase_typ_ms = Some((count + 1) * unit_ms);
+        // count == 0 means "not specified" per JESD216A; avoid a bogus 16ms timeout.
+        let chip_erase_typ_ms = if count == 0 {
+            None // SFDP says "not specified" — use size-based fallback
+        } else {
+            Some((count + 1) * unit_ms)
+        };
 
         (page_size, chip_erase_typ_ms)
     } else {
@@ -226,6 +246,14 @@ pub fn sfdp_to_resolved(info: &SfdpInfo, rdid: [u8; 3], voltage: Voltage) -> Res
         name, info.size_bytes, info.page_size, erase_size, addr_bytes, quad
     );
 
+    // Guarantee at least one erase type so erase_unit can always find an opcode.
+    let erase_types = if info.erase_types.is_empty() {
+        // No SFDP erase table — synthesize conservative 4KB sector erase.
+        vec![crate::chip::EraseType { size_bytes: 4096, opcode: 0x20 }]
+    } else {
+        info.erase_types.clone()
+    };
+
     ResolvedChip {
         name,
         mfr: rdid[0],
@@ -235,7 +263,7 @@ pub fn sfdp_to_resolved(info: &SfdpInfo, rdid: [u8; 3], voltage: Voltage) -> Res
         size_bytes: info.size_bytes,
         page_size: info.page_size,
         erase_size,
-        erase_types: info.erase_types.clone(),
+        erase_types,
         addr_bytes,
         quad,
         source: ParamSource::Sfdp,
@@ -263,7 +291,19 @@ pub fn merge_db_with_sfdp(db: &SpiNorDef, info: &SfdpInfo) -> ResolvedChip {
         size_bytes: info.size_bytes,
         page_size: info.page_size,
         erase_size,
-        erase_types: info.erase_types.clone(),
+        erase_types: if info.erase_types.is_empty() {
+            // Pre-JESD216A table: DW8/DW9 were not parsed — synthesize from DB erase_size.
+            // Use conventional opcodes: 0x20 = 4KB sector, 0x52 = 32KB, 0xD8 = 64KB block.
+            let opcode = match db.erase_size {
+                4_096              => 0x20,
+                32_768             => 0x52,
+                65_536..=131_072   => 0xD8,
+                _                  => 0x20,
+            };
+            vec![EraseType { size_bytes: db.erase_size, opcode }]
+        } else {
+            info.erase_types.clone()
+        },
         addr_bytes,
         quad,
         source: ParamSource::DatabaseWithSfdp,

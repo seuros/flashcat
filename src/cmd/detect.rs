@@ -28,6 +28,9 @@ pub async fn cmd_detect(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
             power_down_and_vcc_off(&dev).await;
             Ok(())
         }
+        // NOTE: matches the literal string from anyhow::bail! in prepare() (main.rs).
+        // This is a string-match sentinel; if the bail message ever changes this branch
+        // will silently stop matching and the error will propagate as Err(e) below.
         Err(e) if e.to_string().contains("no chip detected") => {
             println!("No chip detected");
             Ok(())

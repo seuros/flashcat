@@ -24,9 +24,15 @@ pub struct WpStatus {
 
 async fn read_sr(dev: &UsbDevice, opcode: u8) -> Result<u8> {
     ss_enable(dev).await?;
-    spibus_write(dev, &[opcode]).await?;
-    let data = spibus_read(dev, 1).await?;
-    ss_disable(dev).await?;
+    let wr   = spibus_write(dev, &[opcode]).await;
+    let rd   = spibus_read(dev, 1).await;
+    let dis  = ss_disable(dev).await;
+    wr?;
+    let data = rd?;
+    dis?;
+    if data.is_empty() {
+        bail!("RDSR short response: 0 bytes");
+    }
     Ok(data[0])
 }
 
@@ -111,13 +117,34 @@ fn decode_range_spi25(size: u32, bp: u8, tb: u8, sec: u8, cmp: u8) -> String {
 /// Write-enable then write a single status register byte via the given opcode.
 /// Polls WIP until the SR write completes (typically < 15 ms).
 async fn write_sr(dev: &UsbDevice, wren_opcode: u8, wrsr_opcode: u8, value: u8) -> Result<()> {
+    write_sr_bytes(dev, wren_opcode, wrsr_opcode, &[value]).await
+}
+
+/// Write-enable then write one or two status register bytes atomically via the
+/// given opcode.  Used for 2-byte WRSR(0x01, sr1, sr2) on Winbond/GigaDevice
+/// parts where a single-byte WRSR resets SR2 to defaults (clearing QE etc.).
+/// Polls WIP until the SR write completes (typically < 15 ms).
+async fn write_sr_bytes(
+    dev: &UsbDevice,
+    wren_opcode: u8,
+    wrsr_opcode: u8,
+    values: &[u8],
+) -> Result<()> {
     ss_enable(dev).await?;
-    spibus_write(dev, &[wren_opcode]).await?;
-    ss_disable(dev).await?;
+    let wr  = spibus_write(dev, &[wren_opcode]).await;
+    let dis = ss_disable(dev).await;
+    wr?;
+    dis?;
+
+    let mut payload = Vec::with_capacity(1 + values.len());
+    payload.push(wrsr_opcode);
+    payload.extend_from_slice(values);
 
     ss_enable(dev).await?;
-    spibus_write(dev, &[wrsr_opcode, value]).await?;
-    ss_disable(dev).await?;
+    let wr  = spibus_write(dev, &payload).await;
+    let dis = ss_disable(dev).await;
+    wr?;
+    dis?;
 
     // Poll WIP: SR writes complete in < 15 ms; allow up to 500 ms.
     for _ in 0..100 {
@@ -145,25 +172,38 @@ pub async fn protect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
         bail!("SRP0 is set — status register is hardware-write-protected (WP# pin or permanent)");
     }
 
-    // Set BP[2:0]=111, clear TB(5) and SEC(6), preserve SRP0(7) and WIP/WEL(0,1).
-    // 0x1C = 0001_1100 → BP0|BP1|BP2 bits mask
-    let new_sr1 = (sr1 & 0x83) | 0x1C;
-    debug!("protect: SR1 {sr1:#04x} → {new_sr1:#04x}");
-    write_sr(dev, 0x06, 0x01, new_sr1).await?;
+    // Pick the right BP layout based on manufacturer and chip size:
+    //   Winbond W25Q256+ (MFR=0xEF, >16MB): 4-bit BP layout — BP3(6)|BP2(5)|BP1(4)|BP0(3)|TB(2), set_mask=0x78
+    //   All others (Macronix, EON, GigaDevice, ISSI, etc.): 3-bit BP layout — bit 6 is QE/SEC, set_mask=0x1C
+    // preserve_mask 0x83 = 1000_0011: keeps SRP0(7) and WIP/WEL(1:0), clears SEC/BP3 at bit 6.
+    let is_winbond_4bit_bp = chip.mfr == MFR_WINBOND && chip.size_bytes > 16 * 1024 * 1024;
+    let (preserve_mask, set_mask, verify_mask) = if is_winbond_4bit_bp {
+        // W25Q256+: 4-bit BP layout, BP3 at bit 6
+        (0x83u8, 0x78u8, 0x78u8)
+    } else {
+        // 3-bit BP layout, bit 6 is QE or SEC — must not be touched
+        (0x83u8, 0x1Cu8, 0x1Cu8)
+    };
+    let new_sr1 = (sr1 & preserve_mask) | set_mask;
 
-    // For Winbond/GD: also clear CMP (SR2 bit 6) to avoid complement-inversion.
+    // For Winbond/GD: read SR2 first and include it in a single 2-byte WRSR(0x01)
+    // so that SR2 (including QE bit) is preserved atomically.  A single-byte
+    // WRSR on older BV/DV/FV revisions resets SR2 to defaults, silently clearing
+    // QE.  We also clear CMP (SR2 bit 6) in the same transaction to avoid
+    // complement-inversion of the protected range.
     if matches!(chip.mfr, MFR_WINBOND | MFR_GIGADEVICE) {
         let sr2 = read_sr(dev, 0x35).await?;
-        if sr2 & 0x40 != 0 {
-            let new_sr2 = sr2 & !0x40;
-            debug!("protect: SR2 {sr2:#04x} → {new_sr2:#04x} (clearing CMP)");
-            write_sr(dev, 0x06, 0x31, new_sr2).await?;
-        }
+        let new_sr2 = sr2 & !0x40u8; // clear CMP
+        debug!("protect: SR1 {sr1:#04x} → {new_sr1:#04x}, SR2 {sr2:#04x} → {new_sr2:#04x}");
+        write_sr_bytes(dev, 0x06, 0x01, &[new_sr1, new_sr2]).await?;
+    } else {
+        debug!("protect: SR1 {sr1:#04x} → {new_sr1:#04x}");
+        write_sr(dev, 0x06, 0x01, new_sr1).await?;
     }
 
     // Verify BP bits were actually written (SRP could have blocked it silently).
     let readback = read_sr(dev, 0x05).await?;
-    if readback & 0x1C != 0x1C {
+    if readback & verify_mask != verify_mask {
         bail!("protection write was rejected by chip (readback SR1={readback:#04x}) — check WP# pin");
     }
 
@@ -183,22 +223,28 @@ pub async fn unprotect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> 
 
     // Clear BP[2:0](4:2), TB(5), SEC(6); preserve SRP0(7), WIP(0), WEL(1).
     let new_sr1 = sr1 & 0x83;
-    debug!("unprotect: SR1 {sr1:#04x} → {new_sr1:#04x}");
-    write_sr(dev, 0x06, 0x01, new_sr1).await?;
 
-    // For Winbond/GD: clear CMP (SR2 bit 6) — CMP=1 with BP=0 means all protected.
+    // For Winbond/GD: read SR2 first and include it in a single 2-byte WRSR(0x01)
+    // to preserve SR2 atomically (prevents older BV/DV/FV revisions from resetting
+    // SR2 to defaults and silently clearing QE).  Clear CMP (SR2 bit 6) in the
+    // same transaction — CMP=1 with BP=0 would mean the entire chip is protected.
     if matches!(chip.mfr, MFR_WINBOND | MFR_GIGADEVICE) {
         let sr2 = read_sr(dev, 0x35).await?;
-        if sr2 & 0x40 != 0 {
-            let new_sr2 = sr2 & !0x40u8;
-            debug!("unprotect: SR2 {sr2:#04x} → {new_sr2:#04x} (clearing CMP)");
-            write_sr(dev, 0x06, 0x31, new_sr2).await?;
-        }
+        let new_sr2 = sr2 & !0x40u8; // clear CMP
+        debug!("unprotect: SR1 {sr1:#04x} → {new_sr1:#04x}, SR2 {sr2:#04x} → {new_sr2:#04x}");
+        write_sr_bytes(dev, 0x06, 0x01, &[new_sr1, new_sr2]).await?;
+    } else {
+        debug!("unprotect: SR1 {sr1:#04x} → {new_sr1:#04x}");
+        write_sr(dev, 0x06, 0x01, new_sr1).await?;
     }
 
-    // Verify — BP bits should all be zero now.
+    // Verify — BP bits (and SEC/TB) should all be zero now.
+    // Winbond W25Q256+ (4-bit BP): check BP3(6)|BP2(5)|BP1(4)|BP0(3), mask 0x78.
+    // All others (3-bit BP): check SEC(6)|TB(5)|BP2(4)|BP1(3)|BP0(2), mask 0x7C.
+    let is_winbond_4bit_bp = chip.mfr == MFR_WINBOND && chip.size_bytes > 16 * 1024 * 1024;
+    let check_mask = if is_winbond_4bit_bp { 0x78u8 } else { 0x7Cu8 };
     let readback = read_sr(dev, 0x05).await?;
-    if readback & 0x1C != 0 {
+    if readback & check_mask != 0 {
         bail!("unprotect write was rejected by chip (readback SR1={readback:#04x}) — check WP# pin");
     }
 

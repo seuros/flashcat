@@ -45,12 +45,13 @@ async fn read_status(dev: &UsbDevice) -> Result<u8> {
     let disable_result = ss_disable(dev).await;
 
     write_result?;
-    let status = read_result
-        .expect("status read is attempted when command write succeeds")?
+    let status_result = read_result
+        .expect("status read is attempted when command write succeeds");
+    disable_result?;
+    let status = status_result?
         .first()
         .copied()
         .unwrap_or(STATUS_WIP);
-    disable_result?;
     Ok(status)
 }
 

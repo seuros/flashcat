@@ -60,6 +60,9 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
         }
 
         if opts.smart {
+            if opts.erase {
+                eprintln!("note: --erase is ignored when --smart is set (smart write handles erase selectively)");
+            }
             info!("smart write: read-compare-erase-write {} bytes to {} at {eff_offset:#010x}", data.len(), chip.name, );
             spi::write_smart(&dev, &chip, eff_offset, &data).await?;
             println!("Written {} bytes (smart)", data.len());
@@ -73,6 +76,9 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
                 } else {
                     spi::erase_range(&dev, &chip, eff_offset, data.len() as u32).await?;
                 }
+            }
+            if !opts.erase && !opts.smart && !full_chip {
+                eprintln!("warning: writing without --erase or --smart — flash must be pre-erased or bits can only be cleared");
             }
             info!("writing {} bytes to {} at offset {eff_offset:#010x}", data.len(), chip.name);
             spi::write(&dev, &chip, eff_offset, &data).await?;

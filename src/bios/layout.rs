@@ -180,8 +180,10 @@ pub fn scan_fmap(data: &[u8]) -> Option<(FmapHeader, Vec<FmapArea>)> {
         let area_name = parse_name_field(&a[8..40]);
         let flags = u16::from_le_bytes(a[40..42].try_into().ok()?);
 
-        // FMAP area.offset is relative to header.base; compute SPI offset
-        let _spi_offset = area_offset.saturating_sub(base as u32);
+        // FMAP area.offset is relative to header.base; compute SPI offset.
+        // Use 64-bit arithmetic so bases >= 4 GB (e.g. 0xFF000000 on UEFI boards)
+        // do not truncate before the subtraction.
+        let _spi_offset = (area_offset as u64).saturating_sub(base) as u32;
 
         areas.push(FmapArea {
             offset: area_offset,
@@ -211,7 +213,9 @@ pub fn fmap_to_regions(header: &FmapHeader, areas: &[FmapArea]) -> Vec<Region> {
     areas
         .iter()
         .map(|a| {
-            let spi_offset = a.offset.saturating_sub(header.base as u32);
+            // Use 64-bit arithmetic so bases >= 4 GB (e.g. 0xFF000000 on UEFI boards)
+            // are not truncated before the subtraction.
+            let spi_offset = (a.offset as u64).saturating_sub(header.base) as u32;
             Region {
                 name: a.name.clone(),
                 offset: spi_offset,
@@ -438,6 +442,32 @@ mod tests {
         blob.extend_from_slice(&[0u8; 32]); // name
         blob.extend_from_slice(&512u16.to_le_bytes()); // nareas = 512 > 256 → None
         assert!(scan_fmap(&blob).is_none());
+    }
+
+    #[test]
+    fn test_fmap_to_regions_high_base() {
+        // UEFI boards map flash at 0xFF000000 (4 GB - 16 MB).
+        // With `as u32` truncation the subtraction produces garbage; with u64 it
+        // must yield the correct chip-relative offset.
+        let base: u64 = 0xFF00_0000;
+        let header = FmapHeader {
+            ver_major: 1,
+            ver_minor: 0,
+            base,
+            size: 16 * 1024 * 1024,
+            name: "BIOS".to_string(),
+            nareas: 1,
+        };
+        // area.offset is a physical address inside the mapped window
+        let areas = vec![FmapArea {
+            offset: (base + 0x0010_0000) as u32, // 0xFF10_0000 fits in u32
+            size: 0x10000,
+            name: "ME".to_string(),
+            flags: 0,
+        }];
+        let regions = fmap_to_regions(&header, &areas);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].offset, 0x0010_0000, "chip-relative offset must be 1 MB");
     }
 
     #[test]

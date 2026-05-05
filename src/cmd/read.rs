@@ -69,8 +69,12 @@ async fn run(
 
     let data = if opts.quad {
         info!("quad SPI mode: enabling QE bit and using SqiRdFlash");
-        spi::enable_quad(dev, chip.mfr).await?;
+        // Validate the SQI clock speed against the programmer first — sqi_setup
+        // only configures the FlashcatUSB programmer's clock divisor (UsbReq::SqiSetup)
+        // and does not touch the flash chip.  Failing here avoids writing the QE
+        // bit (potentially non-volatile) when an unsupported speed was requested.
         spi::sqi_setup(dev, opts.speed.0).await?;
+        spi::enable_quad(dev, chip.mfr).await?;
         spi::read_quad(dev, chip, eff_offset, len).await?
     } else {
         spi::read(dev, chip, eff_offset, len, opts.legacy_read).await?

@@ -184,6 +184,26 @@ enum Cmd {
     /// Remove all write protection (clears BP bits)
     Unprotect,
 
+    /// Lock flash blocks (Winbond individual block lock, 0x36/0x7E)
+    BlockLock {
+        /// Lock all blocks globally (0x7E — volatile, resets on power cycle, ~45ms); mutually exclusive with --addr
+        #[arg(long)]
+        global: bool,
+        /// Lock the sector/block containing this address (0x36 — volatile, resets on power cycle); mutually exclusive with --global
+        #[arg(long, value_parser = parse_hex_or_dec)]
+        addr: Option<u32>,
+    },
+
+    /// Unlock flash blocks (Winbond individual block unlock, 0x39/0x98)
+    BlockUnlock {
+        /// Unlock all blocks globally (0x98 — volatile, resets on power cycle, ~45ms); mutually exclusive with --addr
+        #[arg(long)]
+        global: bool,
+        /// Unlock the sector/block containing this address (0x39 — volatile, resets on power cycle); mutually exclusive with --global
+        #[arg(long, value_parser = parse_hex_or_dec)]
+        addr: Option<u32>,
+    },
+
     /// Parse a layout file and list regions (no hardware required)
     Regions {
         #[arg(short, long)]
@@ -260,6 +280,8 @@ async fn main() -> Result<()> {
         Cmd::Uid => cmd::cmd_uid(vc, speed).await,
         Cmd::Protect => cmd::cmd_protect(vc, speed).await,
         Cmd::Unprotect => cmd::cmd_unprotect(vc, speed).await,
+        Cmd::BlockLock { global, addr } => cmd::cmd_block_lock(vc, speed, *global, *addr).await,
+        Cmd::BlockUnlock { global, addr } => cmd::cmd_block_unlock(vc, speed, *global, *addr).await,
         Cmd::Regions { file } => cmd::cmd_regions(file.clone()).await,
     }
 }
@@ -307,11 +329,15 @@ pub(crate) async fn prepare(
         }
         VoltageChoice::Explicit(voltage) => {
             let dev = setup(voltage, speed).await?;
-            match spi::detect(&dev, voltage).await? {
-                Some(chip) => Ok((dev, chip, voltage)),
-                None => {
+            match spi::detect(&dev, voltage).await {
+                Ok(Some(chip)) => Ok((dev, chip, voltage)),
+                Ok(None) => {
                     power_down_and_vcc_off(&dev).await;
                     anyhow::bail!("no chip detected")
+                }
+                Err(e) => {
+                    power_down_and_vcc_off(&dev).await;
+                    Err(e)
                 }
             }
         }
