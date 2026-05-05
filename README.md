@@ -104,17 +104,17 @@ flashcat watch
 
 ### Write options
 
+`flashcat write` uses smart write by default — it reads the chip, skips matching sectors,
+erases only what needs changing (using 64KB/32KB/4KB units as the chip supports), and writes
+only the necessary pages. Use `--erase` to bypass smart and force a full erase before writing.
+
 | Flag | Description |
 |------|-------------|
 | `--offset` | Start address |
-| `--erase` | Erase affected sectors before writing; full-chip images erase automatically |
+| `--erase` | Force erase before writing, then raw write (bypasses smart comparison; use for pre-erased blank chips) |
 | `--verify` | Read back and verify after writing |
-| `--smart` | Read-compare-erase-write: skips matching sectors and skips all-0xFF pages after erase |
 | `--layout <file>` | Layout file for region selection |
 | `--region <name>` | Write only the named region (file size must match region size exactly) |
-
-Partial writes (offset > 0 or length < chip size) without `--erase` or `--smart` will emit
-a warning — sectors not explicitly erased may contain stale data, producing corrupt results.
 
 ### Erase options
 

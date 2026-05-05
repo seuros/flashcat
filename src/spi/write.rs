@@ -7,7 +7,7 @@ use crate::usb::{UsbDevice, UsbReq};
 use tracing::{debug, info};
 
 use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
-use super::erase::erase_unit;
+use super::erase::{erase_unit_opcode, plan_erase_ops, EraseOp};
 use super::read::read;
 
 // Firmware handles multi-page writes internally (WREN+PAGE_PROGRAM+WIP per page).
@@ -104,9 +104,23 @@ pub async fn write(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data: &[u8
     Ok(())
 }
 
-/// Read-compare-erase-write: only touches sectors that differ, skips all-0xFF pages.
-/// Reads the full sector-aligned range so partial first/last sectors are preserved.
-/// Equivalent to flashrom's default write strategy.
+/// Read-compare-erase-write: only touches sectors that differ, uses the largest
+/// available erase unit (64KB > 32KB > 4KB) for each dirty region.
+///
+/// Three phases:
+///   A) Classify all sectors in the write range as Skip / WriteOnly / Erase.
+///   B) Plan and execute erases (largest-unit greedy tiling for dirty regions).
+///      Expands each EraseOp into a coverage set — large erases may sweep clean
+///      sectors outside the write range that must be restored in Phase C.
+///   C) Write: erased sectors get all non-0xFF pages written back; write-only
+///      sectors get only changed pages written; skipped sectors are left alone.
+///
+/// The read range is extended to the nearest large-erase alignment boundary so
+/// the original content of any swept clean sector is always available for restore.
+///
+/// NOTE: Phase B erases all dirty regions before any writes begin. This widens
+/// the power-fail window compared to a per-sector erase+write loop. Acceptable
+/// for a USB flash programmer; not appropriate for production firmware updaters.
 pub async fn write_smart(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data: &[u8]) -> Result<()> {
     if data.is_empty() {
         return Ok(());
@@ -117,52 +131,129 @@ pub async fn write_smart(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data
         .checked_add(data.len() as u32)
         .ok_or_else(|| anyhow::anyhow!("write range overflows u32 (offset={offset:#x} len={:#x})", data.len()))?;
     let last_sector_start = ((end - 1) / erase_size) * erase_size;
-    let aligned_len = (last_sector_start as u64 + erase_size as u64 - first_sector as u64) as usize;
 
-    // Read the full sector-aligned range so we can restore untouched bytes.
-    let aligned_len_u32 = u32::try_from(aligned_len)
-        .map_err(|_| anyhow::anyhow!("aligned write range {aligned_len:#x} exceeds u32 — chip too large for this operation"))?;
-    let original = read(dev, chip, first_sector, aligned_len_u32, false).await?;
+    // Extend the read domain to cover any large erase alignment, so clean sectors
+    // swept by a 64KB/32KB erase can be restored with their original content.
+    let max_erase_unit = chip.erase_types.iter()
+        .map(|e| e.size_bytes)
+        .max()
+        .unwrap_or(erase_size);
 
-    // Build merged buffer: start from original, overlay new data at the right offset.
+    let read_start = (first_sector / max_erase_unit) * max_erase_unit;
+    let last_large_start = ((last_sector_start + erase_size - 1) / max_erase_unit) * max_erase_unit;
+    let read_end = (last_large_start + max_erase_unit).min(chip.size_bytes);
+    let read_len = read_end - read_start;
+
+    let read_len_u32 = u32::try_from(read_len)
+        .map_err(|_| anyhow::anyhow!("read range {read_len:#x} exceeds u32"))?;
+
+    let original = read(dev, chip, read_start, read_len_u32, false).await?;
+
+    // Build merged buffer over the read range: original with new data overlaid.
     let mut merged = original.clone();
-    let overlay_start = (offset - first_sector) as usize;
+    let overlay_start = (offset - read_start) as usize;
     merged[overlay_start..overlay_start + data.len()].copy_from_slice(data);
 
-    let mut stats = SmartStats::default();
-    let mut pb = Progress::new("Writing", aligned_len_u32 as u64);
+    // Mixed erase (64KB/32KB/4KB) is only safe when the chip advertises all sizes
+    // and uses 3-byte addressing. 4-byte address chips use different opcodes and
+    // are handled with per-sector erase_unit_opcode calls at erase_size granularity.
+    let use_mixed = chip.addr_bytes == 3
+        && chip.erase_types.iter().any(|e| e.size_bytes == erase_size)
+        && chip.erase_types.len() > 1;
 
-    let mut sector_idx = 0usize;
+    // ── Phase A: classify write-range sectors ────────────────────────────────
+    let mut dirty_erase_addrs: Vec<u32> = Vec::new();
+    let mut write_only_addrs:  Vec<u32> = Vec::new();
+    let mut skip_count = 0u32;
+
+    let mut sector_addr = first_sector;
     loop {
-        let sector_start = first_sector + (sector_idx as u32 * erase_size);
-        let buf_start = sector_idx * erase_size as usize;
-        let buf_end = buf_start + erase_size as usize;
+        let buf_off = (sector_addr - read_start) as usize;
+        let orig_s = &original[buf_off..buf_off + erase_size as usize];
+        let new_s  = &merged [buf_off..buf_off + erase_size as usize];
 
-        let orig_sector = original.get(buf_start..buf_end)
-            .ok_or_else(|| anyhow::anyhow!("sector index {sector_idx} out of bounds (original)"))?;
-        let new_sector = merged.get(buf_start..buf_end)
-            .ok_or_else(|| anyhow::anyhow!("sector index {sector_idx} out of bounds (merged)"))?;
-
-        if orig_sector == new_sector {
-            stats.sectors_skipped += 1;
-            pb.inc(erase_size as u64);  // advance progress for skipped sectors
+        if orig_s == new_s {
+            skip_count += 1;
+        } else if new_s.iter().zip(orig_s).any(|(n, o)| n & !o != 0) {
+            dirty_erase_addrs.push(sector_addr);
         } else {
-            let needs_erase = new_sector.iter().zip(orig_sector).any(|(n, o)| n & !o != 0);
-            if needs_erase {
-                erase_unit(dev, chip, sector_start).await?;
-                stats.sectors_erased += 1;
-            }
-            write_sector_pages(dev, chip, sector_start, new_sector, orig_sector, needs_erase, &mut pb, &mut stats).await?;
+            write_only_addrs.push(sector_addr);
         }
 
-        sector_idx += 1;
-        if sector_start >= last_sector_start { break; }
+        if sector_addr >= last_sector_start { break; }
+        sector_addr += erase_size;
+    }
+
+    let mut stats = SmartStats { sectors_skipped: skip_count, ..Default::default() };
+
+    // ── Phase B: plan and execute erases ─────────────────────────────────────
+    let erase_ops: Vec<EraseOp> = if use_mixed {
+        plan_erase_ops(&dirty_erase_addrs, &chip.erase_types, erase_size)?
+    } else {
+        let opcode = chip.erase_types.iter()
+            .find(|e| e.size_bytes == erase_size)
+            .map(|e| e.opcode)
+            .unwrap_or(0x20);
+        dirty_erase_addrs.iter()
+            .map(|&addr| EraseOp { addr, size: erase_size, opcode })
+            .collect()
+    };
+
+    for op in &erase_ops {
+        erase_unit_opcode(dev, chip, op.addr, op.opcode, op.size > 4096).await?;
+        stats.erase_ops   += 1;
+        stats.bytes_erased += op.size as u64;
+    }
+
+    // Expand erase ops into a sorted set of all covered erase_size-sector addresses.
+    // This includes clean sectors swept by large erases — Phase C will restore them.
+    let mut erased_coverage: Vec<u32> = erase_ops.iter()
+        .flat_map(|op| (op.addr..op.addr + op.size).step_by(erase_size as usize))
+        .collect();
+    erased_coverage.sort_unstable();
+    erased_coverage.dedup();
+
+    // ── Phase C: write ───────────────────────────────────────────────────────
+    // Iterate the full read range so spillover sectors (erased but outside the
+    // write range) are restored with their original content.
+    let total_sectors = (read_end - read_start) / erase_size;
+    let mut pb = Progress::new("Writing", read_len_u32 as u64);
+
+    let mut addr = read_start;
+    for _ in 0..total_sectors {
+        let buf_off = (addr - read_start) as usize;
+        let orig_s = &original[buf_off..buf_off + erase_size as usize];
+
+        // For sectors inside the write range use merged (new) content;
+        // for spillover sectors outside the range restore original content.
+        let in_write_range = addr >= first_sector && addr <= last_sector_start;
+        let target_s: &[u8] = if in_write_range {
+            &merged[buf_off..buf_off + erase_size as usize]
+        } else {
+            orig_s
+        };
+
+        let in_coverage = erased_coverage.binary_search(&addr).is_ok();
+        let is_write_only = write_only_addrs.binary_search(&addr).is_ok();
+
+        if in_coverage {
+            // Sector was erased (chip is all 0xFF) — write back all non-0xFF pages.
+            write_sector_pages(dev, chip, addr, target_s, orig_s, true, &mut pb, &mut stats).await?;
+        } else if is_write_only {
+            // Only 1→0 transitions needed — program changed pages without erase.
+            write_sector_pages(dev, chip, addr, target_s, orig_s, false, &mut pb, &mut stats).await?;
+        } else {
+            pb.inc(erase_size as u64);
+        }
+
+        addr += erase_size;
     }
 
     pb.finish();
     info!(
-        "smart write: {} sectors skipped, {} erased, {} pages written, {} pages skipped (0xFF)",
-        stats.sectors_skipped, stats.sectors_erased, stats.pages_written, stats.pages_skipped
+        "smart write: {} sectors skipped, {} erase op(s) ({} KB), {} pages written, {} pages skipped",
+        stats.sectors_skipped, stats.erase_ops, stats.bytes_erased / 1024,
+        stats.pages_written, stats.pages_skipped,
     );
     Ok(())
 }
@@ -170,7 +261,8 @@ pub async fn write_smart(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, data
 #[derive(Default)]
 struct SmartStats {
     sectors_skipped: u32,
-    sectors_erased:  u32,
+    erase_ops:       u32,
+    bytes_erased:    u64,
     pages_skipped:   u32,
     pages_written:   u32,
 }

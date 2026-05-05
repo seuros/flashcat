@@ -8,6 +8,14 @@ use crate::usb::UsbDevice;
 use super::bus::{spibus_write, ss_disable, ss_enable};
 use super::write::{wait_wip, wait_wip_block, wait_wip_chip_erase, write_enable};
 
+/// A single planned erase operation with a specific opcode and size.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EraseOp {
+    pub addr:   u32,
+    pub size:   u32,
+    pub opcode: u8,
+}
+
 pub async fn erase_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     info!("chip erase: {} ({} bytes)", chip.name, chip.size_bytes);
     write_enable(dev).await?;
@@ -91,7 +99,7 @@ pub(crate) fn pick_erase_op(addr: u32, remaining_bytes: u32, erase_types: &[Eras
 
 /// Erase a single block using an explicit opcode.
 /// Encodes a 4-byte address when chip.addr_bytes == 4, 3-byte otherwise.
-async fn erase_unit_opcode(
+pub(crate) async fn erase_unit_opcode(
     dev: &UsbDevice,
     chip: &ResolvedChip,
     addr: u32,
@@ -147,6 +155,67 @@ pub(crate) fn erase_range_bounds(unit: u32, offset: u32, len: u32) -> Result<(u3
     let last  = (end_inclusive / unit) * unit;
     let count = (last - first) / unit + 1;
     Ok((first, count))
+}
+
+/// Pure (no I/O) erase planner: given a sorted list of dirty sector addresses
+/// (each `erase_size`-aligned), groups them into contiguous runs and greedily
+/// tiles each run with the largest available erase units via `pick_erase_op`.
+///
+/// Only call this when the chip advertises mixed erase types (has_4k + larger).
+/// Gaps between non-consecutive dirty sectors are hard barriers — the planner
+/// never bridges them, ensuring only dirty regions are erased.
+pub(crate) fn plan_erase_ops(
+    dirty_addrs: &[u32],
+    erase_types: &[EraseType],
+    erase_size: u32,
+) -> Result<Vec<EraseOp>> {
+    if dirty_addrs.is_empty() {
+        return Ok(vec![]);
+    }
+    if !erase_types.iter().any(|e| e.size_bytes == erase_size) {
+        bail!("plan_erase_ops: no erase type for minimum unit {erase_size}B in erase_types");
+    }
+
+    let mut ops = Vec::new();
+
+    // Group consecutive dirty sectors into contiguous runs.
+    let mut run_start = dirty_addrs[0];
+    let mut run_end   = dirty_addrs[0]; // inclusive last sector in run
+
+    for &addr in &dirty_addrs[1..] {
+        if addr == run_end + erase_size {
+            run_end = addr;
+        } else {
+            // Flush current run.
+            tile_run(run_start, run_end, erase_size, erase_types, &mut ops)?;
+            run_start = addr;
+            run_end   = addr;
+        }
+    }
+    tile_run(run_start, run_end, erase_size, erase_types, &mut ops)?;
+
+    Ok(ops)
+}
+
+/// Tile a contiguous dirty run [run_start..=run_end] with erase ops via pick_erase_op.
+fn tile_run(
+    run_start: u32,
+    run_end:   u32,
+    erase_size: u32,
+    erase_types: &[EraseType],
+    ops: &mut Vec<EraseOp>,
+) -> Result<()> {
+    let run_bytes_end = run_end + erase_size; // exclusive end of run
+    let mut cursor = run_start;
+    while cursor < run_bytes_end {
+        let remaining = run_bytes_end - cursor;
+        let (opcode, size) = pick_erase_op(cursor, remaining, erase_types)?;
+        ops.push(EraseOp { addr: cursor, size, opcode });
+        cursor = cursor
+            .checked_add(size)
+            .ok_or_else(|| anyhow::anyhow!("erase op address overflow at {cursor:#x} + {size:#x}"))?;
+    }
+    Ok(())
 }
 
 /// Erase all erase units that overlap [offset, offset+len).
@@ -227,7 +296,7 @@ async fn erase_range_mixed(dev: &UsbDevice, chip: &ResolvedChip, offset: u32, le
 
 #[cfg(test)]
 mod tests {
-    use super::{erase_range_bounds, pick_erase_op};
+    use super::{erase_range_bounds, pick_erase_op, plan_erase_ops, EraseOp};
     use crate::chip::EraseType;
 
     const SECTOR: u32 = 4096;
@@ -379,16 +448,95 @@ mod tests {
 
     #[test]
     fn erase_unit_uses_opcode_from_erase_types() {
-        // Verify the opcode lookup logic: find erase_size in erase_types
         let types = vec![
             EraseType { size_bytes: 4096,  opcode: 0x20 },
             EraseType { size_bytes: 65536, opcode: 0xD8 },
         ];
-        // Simulate: chip.erase_size = 65536 → expect opcode 0xD8
         let found = types.iter().find(|e| e.size_bytes == 65536).unwrap();
         assert_eq!(found.opcode, 0xD8);
-        // Simulate: chip.erase_size = 4096 → expect opcode 0x20
         let found = types.iter().find(|e| e.size_bytes == 4096).unwrap();
         assert_eq!(found.opcode, 0x20);
+    }
+
+    // ── plan_erase_ops tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn plan_single_dirty_sector_at_64k_boundary() {
+        // Single 4KB dirty sector at 0x10000 — remaining=4096, too small for 32KB/64KB.
+        let ops = plan_erase_ops(&[0x10000], &all_types(), 4096).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0], EraseOp { addr: 0x10000, size: 4096, opcode: 0x20 });
+    }
+
+    #[test]
+    fn plan_eight_adjacent_sectors_coalesce_to_one_32k() {
+        // 8 consecutive 4KB sectors at 0x8000 = exactly 32KB → one 32KB erase.
+        let addrs: Vec<u32> = (0..8).map(|i| 0x8000_u32 + i * 4096).collect();
+        let ops = plan_erase_ops(&addrs, &all_types(), 4096).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0], EraseOp { addr: 0x8000, size: 32768, opcode: 0x52 });
+    }
+
+    #[test]
+    fn plan_sixteen_adjacent_sectors_coalesce_to_one_64k() {
+        // 16 consecutive 4KB sectors at 0x10000 = exactly 64KB → one 64KB erase.
+        let addrs: Vec<u32> = (0..16).map(|i| 0x10000_u32 + i * 4096).collect();
+        let ops = plan_erase_ops(&addrs, &all_types(), 4096).unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0], EraseOp { addr: 0x10000, size: 65536, opcode: 0xD8 });
+    }
+
+    #[test]
+    fn plan_non_contiguous_sectors_produce_separate_groups() {
+        // Dirty sectors at 0x0 and 0x20000 (gap between them) → separate ops.
+        let ops = plan_erase_ops(&[0x0000, 0x20000], &all_types(), 4096).unwrap();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0].addr, 0x0000);
+        assert_eq!(ops[1].addr, 0x20000);
+    }
+
+    #[test]
+    fn plan_4k_only_chip_always_4k_ops() {
+        // Chip with only 4KB erase — even 16 aligned sectors must each use 4KB.
+        let addrs: Vec<u32> = (0..16).map(|i| 0x10000_u32 + i * 4096).collect();
+        let ops = plan_erase_ops(&addrs, &sector_only(), 4096).unwrap();
+        assert_eq!(ops.len(), 16);
+        assert!(ops.iter().all(|op| op.size == 4096 && op.opcode == 0x20));
+    }
+
+    #[test]
+    fn plan_two_sectors_prefer_4k_when_run_too_small_for_32k() {
+        // Two 4KB sectors = 8KB dirty run — not enough for 32KB erase, use 2×4KB.
+        let ops = plan_erase_ops(&[0x8000, 0x9000], &all_types(), 4096).unwrap();
+        assert_eq!(ops.len(), 2);
+        assert!(ops.iter().all(|op| op.size == 4096));
+    }
+
+    #[test]
+    fn plan_empty_dirty_addrs_returns_empty() {
+        let ops = plan_erase_ops(&[], &all_types(), 4096).unwrap();
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn plan_missing_min_erase_type_is_error() {
+        // erase_size=4096 but no 4KB type in erase_types → should bail.
+        let types = vec![EraseType { size_bytes: 65536, opcode: 0xD8 }];
+        assert!(plan_erase_ops(&[0x10000], &types, 4096).is_err());
+    }
+
+    #[test]
+    fn erased_coverage_expansion_64k_op_gives_16_sectors() {
+        // Verify that a 64KB EraseOp at 0x10000 expands to exactly 16 × 4KB addresses.
+        let op = EraseOp { addr: 0x10000, size: 65536, opcode: 0xD8 };
+        let erase_size: u32 = 4096;
+        let mut coverage: Vec<u32> = (op.addr..op.addr + op.size)
+            .step_by(erase_size as usize)
+            .collect();
+        coverage.sort_unstable();
+        coverage.dedup();
+        assert_eq!(coverage.len(), 16);
+        assert_eq!(coverage[0],  0x10000);
+        assert_eq!(coverage[15], 0x1F000);
     }
 }

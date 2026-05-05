@@ -60,28 +60,27 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
         }
 
         if opts.smart {
-            if opts.erase {
-                eprintln!("note: --erase is ignored when --smart is set (smart write handles erase selectively)");
-            }
-            info!("smart write: read-compare-erase-write {} bytes to {} at {eff_offset:#010x}", data.len(), chip.name, );
-            spi::write_smart(&dev, &chip, eff_offset, &data).await?;
-            println!("Written {} bytes (smart)", data.len());
-        } else {
+            eprintln!("note: --smart is deprecated; smart write is now always the default");
+        }
+
+        if opts.erase {
+            // Forced erase path: chip/range erase then raw write.
+            // Use this when the chip is already blank or you want a clean slate.
             let full_chip = eff_offset == 0 && data.len() as u32 == chip.size_bytes;
-            if opts.erase || full_chip {
-                if full_chip {
-                    info!("chip erase: {} — this may take up to {}s", chip.name, chip.chip_erase_timeout_secs());
-                    spi::erase_chip(&dev, &chip).await?;
-                    println!("Erased (chip)");
-                } else {
-                    spi::erase_range(&dev, &chip, eff_offset, data.len() as u32).await?;
-                }
-            }
-            if !opts.erase && !opts.smart && !full_chip {
-                eprintln!("warning: writing without --erase or --smart — flash must be pre-erased or bits can only be cleared");
+            if full_chip {
+                info!("chip erase: {} — this may take up to {}s", chip.name, chip.chip_erase_timeout_secs());
+                spi::erase_chip(&dev, &chip).await?;
+                println!("Erased (chip)");
+            } else {
+                spi::erase_range(&dev, &chip, eff_offset, data.len() as u32).await?;
             }
             info!("writing {} bytes to {} at offset {eff_offset:#010x}", data.len(), chip.name);
             spi::write(&dev, &chip, eff_offset, &data).await?;
+            println!("Written {} bytes", data.len());
+        } else {
+            // Default: smart write (read-compare-erase-write with optimal erase granularity).
+            info!("smart write: {} bytes to {} at {eff_offset:#010x}", data.len(), chip.name);
+            spi::write_smart(&dev, &chip, eff_offset, &data).await?;
             println!("Written {} bytes", data.len());
         }
 
@@ -92,7 +91,7 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
                 let diffs = data.iter().zip(readback.iter()).filter(|(a, b)| a != b).count();
                 if probable_missing_erase(&data, &readback) {
                     bail!(
-                        "verify failed — {diffs} bytes differ; readback only has bits cleared relative to the file, so the flash was probably not erased first. Re-write with --erase --verify or --smart --verify"
+                        "verify failed — {diffs} bytes differ; readback only has bits cleared relative to the file, so the flash was probably not erased first. Re-write with --verify (smart write is the default) or --erase --verify for a forced erase"
                     );
                 }
                 bail!("verify failed — {diffs} bytes differ");

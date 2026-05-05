@@ -112,14 +112,14 @@ enum Cmd {
         file: PathBuf,
         #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
         offset: u32,
-        /// Erase affected sectors before writing (automatic for full-chip images)
+        /// Force erase before writing, then raw write (bypasses smart comparison; use for pre-erased blank chips)
         #[arg(long)]
         erase: bool,
         /// Read back and verify after writing
         #[arg(long)]
         verify: bool,
-        /// Smart write: read-compare-erase-write (skips matching sectors and 0xFF pages)
-        #[arg(long)]
+        /// Deprecated: smart write is now always the default; this flag has no effect
+        #[arg(long, hide = true)]
         smart: bool,
         /// Layout file for region selection (flashrom format)
         #[arg(long, value_name = "FILE")]
