@@ -59,6 +59,27 @@ flashcat fmap --file dump.bin
 # List regions in a layout file (no hardware needed)
 flashcat regions --file firmware.layout
 
+# Read the chip's unique 64-bit serial number (counterfeit detection)
+flashcat uid
+
+# Protect entire chip (sets all BP bits, survives power cycle)
+flashcat protect
+
+# Remove all write protection (clears BP bits)
+flashcat unprotect
+
+# Lock all blocks globally — Winbond individual block lock (volatile, ~45ms)
+flashcat block-lock --global
+
+# Lock the sector/block at a specific address (volatile, resets on power cycle)
+flashcat block-lock --addr 0x10000
+
+# Unlock all blocks globally
+flashcat block-unlock --global
+
+# Unlock the sector/block at a specific address
+flashcat block-unlock --addr 0x10000
+
 # Watch for device plug-in and auto-identify chip
 flashcat watch
 ```
@@ -67,7 +88,7 @@ flashcat watch
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mhz` | `8` | SPI clock: 1, 2, 4, 8, 12, 16, 24, 32 |
+| `--mhz` | `8` | SPI clock: 1, 2, 4, 8, 12, 16, 24, 32 (quad reads: 8, 16, 32 only) |
 | `--voltage` | `auto` | Target voltage: `auto`, `1v8`, `3v3`, or `5v` |
 
 ### Read options
@@ -88,8 +109,12 @@ flashcat watch
 | `--offset` | Start address |
 | `--erase` | Erase affected sectors before writing; full-chip images erase automatically |
 | `--verify` | Read back and verify after writing |
+| `--smart` | Read-compare-erase-write: skips matching sectors and skips all-0xFF pages after erase |
 | `--layout <file>` | Layout file for region selection |
 | `--region <name>` | Write only the named region (file size must match region size exactly) |
+
+Partial writes (offset > 0 or length < chip size) without `--erase` or `--smart` will emit
+a warning — sectors not explicitly erased may contain stale data, producing corrupt results.
 
 ### Erase options
 
@@ -137,6 +162,23 @@ Supported formats:
 | **AMD PSP** | AMD Embedded Firmware Structure (`0x55AA55AA`) — PSP and BIOS directory tables |
 | **EFI FV** | Raw EFI Firmware Volumes (`_FVH`) — pre-IFD Apple Macs and bare BIOS region extracts |
 
+## Write protection
+
+`flashcat protect` sets all BP (block protect) bits in Status Register 1 to lock the entire
+chip. `flashcat unprotect` clears them. Changes survive power cycles (non-volatile SR write).
+
+Winbond chips ≤ 16MB use a 3-bit BP field; Winbond chips > 16MB (W25Q256 and up) use a
+4-bit BP field — flashcat detects the geometry from the chip ID and applies the correct mask.
+
+**Individual block lock** (Winbond W25Q series — volatile, resets on power cycle):
+
+| Command | Effect |
+|---------|--------|
+| `block-lock --global` | Lock all blocks (~45ms, opcode 0x7E) |
+| `block-lock --addr <addr>` | Lock the 64KB block containing `<addr>` (opcode 0x36) |
+| `block-unlock --global` | Unlock all blocks (~45ms, opcode 0x98) |
+| `block-unlock --addr <addr>` | Unlock the 64KB block containing `<addr>` (opcode 0x39) |
+
 ## SFDP fallback
 
 If a chip's JEDEC ID is not in the built-in database, flashcat reads the chip's own
@@ -145,6 +187,12 @@ most standards-compliant SPI NOR flash will work even without a database entry.
 
 Ambiguous RDIDs (multiple chips share the same 3-byte ID) are resolved using SFDP
 density when possible.
+
+## Unique ID and counterfeit detection
+
+`flashcat uid` reads the chip's 64-bit factory serial number (opcode 0x4B). Winbond and most
+modern SPI NOR flash support this. The output includes a counterfeit-likelihood assessment
+based on whether the UID is blank (0x00…/0xFF…), a known bad pattern, or plausible.
 
 ## Supported chips
 
