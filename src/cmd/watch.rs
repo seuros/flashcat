@@ -3,7 +3,7 @@ use nusb::hotplug::HotplugEvent;
 
 use crate::spi::SpiSpeed;
 use crate::usb::{PID_CLASSIC, PID_MACH1, PID_PRO, VID_EC};
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, VoltageChoice};
 
 pub async fn cmd_watch(vc: VoltageChoice, speed: SpiSpeed) -> anyhow::Result<()> {
     println!("Watching for FlashcatUSB — press Ctrl-C to stop");
@@ -37,7 +37,7 @@ pub async fn cmd_watch(vc: VoltageChoice, speed: SpiSpeed) -> anyhow::Result<()>
                     chip.erase_size, chip.page_size, chip.addr_bytes);
                 println!("Voltage: {:?}", voltage);
 
-                power_down_and_vcc_off(&dev).await;
+                crate::power_down_and_vcc_off(&dev).await;
             }
             Err(e) if e.to_string().contains("no chip detected") => println!("No chip detected"),
             Err(e) => eprintln!("detect failed: {e}"),

@@ -50,6 +50,15 @@ pub struct SfdpInfo {
     /// Chip erase typical time in ms from DW11 bits[28:24]/[30:29] (JESD216A+).
     /// None if the table is too short (pre-JESD216A) or field is zero.
     pub chip_erase_typ_ms: Option<u64>,
+    /// JEDEC Basic Flash Parameter table size in bytes as reported by the chip.
+    /// Genuine JESD216A+ chips report ≥36 bytes; older chips (e.g. early
+    /// Macronix MX25L6406E) may report only 8 bytes (DW1+DW2: capabilities +
+    /// density). Anything below 36 is treated as "partial" and we fall back to
+    /// the DB for erase/page parameters.
+    pub table_bytes: u32,
+    /// True when the JEDEC Basic table was shorter than the JESD216 minimum
+    /// of 9 dwords (36 bytes). Partial tables still carry valid density info.
+    pub is_partial: bool,
 }
 
 pub async fn read_sfdp(dev: &UsbDevice) -> Result<SfdpInfo> {
@@ -100,8 +109,13 @@ pub async fn read_sfdp(dev: &UsbDevice) -> Result<SfdpInfo> {
 }
 
 fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInfo> {
-    if t.len() < 16 {
-        bail!("JEDEC Basic table too short: {} bytes", t.len());
+    // DW1 (capabilities) + DW2 (density) is the minimum we need to do anything
+    // useful. Early Macronix MX25L6406E parts report exactly 8 bytes here.
+    if t.len() < 8 {
+        bail!(
+            "JEDEC Basic table too short for density: {} bytes (need at least 8)",
+            t.len()
+        );
     }
 
     let dw = |i: usize| -> u32 {
@@ -186,6 +200,12 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
         (256, None)
     };
 
+    let table_bytes = t.len() as u32;
+    // JESD216 minimum basic table = 9 dwords (36 bytes). Pre-JESD216 parts
+    // legitimately report less; we treat those as "partial" and lean on the
+    // chip DB for erase/page parameters.
+    let is_partial = (t.len() as u32) < 36;
+
     Ok(SfdpInfo {
         sfdp_rev: (sfdp_major, sfdp_minor),
         size_bytes,
@@ -195,16 +215,20 @@ fn parse_jedec_basic(t: &[u8], sfdp_major: u8, sfdp_minor: u8) -> Result<SfdpInf
         fast_read_144,
         dtr_supported,
         chip_erase_typ_ms,
+        table_bytes,
+        is_partial,
     })
 }
 
 /// Try SFDP — returns None if the chip doesn't respond or magic is invalid.
+/// Demoted to `info` since many genuine pre-JESD216 chips legitimately lack
+/// SFDP, and we don't want to spam users with WARN logs about it.
 pub async fn try_read_sfdp(dev: &UsbDevice) -> Option<SfdpInfo> {
     soft_reset(dev).await;
     match read_sfdp(dev).await {
         Ok(info) => Some(info),
         Err(e) => {
-            warn!("SFDP not available: {e}");
+            info!("SFDP not available: {e}");
             None
         }
     }
@@ -272,7 +296,60 @@ pub fn sfdp_to_resolved(info: &SfdpInfo, rdid: [u8; 3], voltage: Voltage) -> Res
 }
 
 /// Build a `ResolvedChip` using DB name/voltage and SFDP geometry.
+///
+/// When SFDP reports a partial table (pre-JESD216A density-only), we trust the
+/// DB for everything except the density cross-check. When the SFDP density
+/// disagrees with the DB density we warn loudly — that's the real counterfeit
+/// signal (RDID matches a known part but on-chip density says otherwise).
 pub fn merge_db_with_sfdp(db: &SpiNorDef, info: &SfdpInfo) -> ResolvedChip {
+    let density_matches_db = info.size_bytes == db.size_bytes;
+    if !density_matches_db {
+        warn!(
+            "{} RDID matches DB but SFDP reports {} bytes (DB says {}) — \
+             possible counterfeit or remarked chip; using SFDP geometry",
+            db.name, info.size_bytes, db.size_bytes
+        );
+    }
+
+    if info.is_partial {
+        // Partial SFDP (pre-JESD216A, e.g. Macronix MX25L6406E rev 1.0):
+        // only DW1+DW2 are trustworthy. Trust the DB for erase/page geometry
+        // and only adopt the SFDP density when it agrees (avoids breaking a
+        // good DB entry on a suspicious density mismatch).
+        info!(
+            "SFDP merge: {} DB={} bytes SFDP={} bytes ({} byte basic table) — \
+             using DB params; SFDP density {}",
+            db.name, db.size_bytes, info.size_bytes, info.table_bytes,
+            if density_matches_db { "agrees" } else { "DISAGREES" }
+        );
+
+        let quad = info.fast_read_114 || info.fast_read_144 || db.quad;
+        let size_bytes = if density_matches_db { info.size_bytes } else { db.size_bytes };
+        let addr_bytes = sfdp_addr_bytes(size_bytes);
+        let opcode = match db.erase_size {
+            4_096              => 0x20,
+            32_768             => 0x52,
+            65_536..=131_072   => 0xD8,
+            _                  => 0x20,
+        };
+
+        return ResolvedChip {
+            name: db.name.clone(),
+            mfr: db.mfr,
+            id1: db.id1,
+            id2: db.id2,
+            voltage: db.voltage,
+            size_bytes,
+            page_size: db.page_size,
+            erase_size: db.erase_size,
+            erase_types: vec![EraseType { size_bytes: db.erase_size, opcode }],
+            addr_bytes,
+            quad,
+            source: ParamSource::DatabaseWithPartialSfdp,
+            chip_erase_max_ms: None,
+        };
+    }
+
     let erase_size = sfdp_erase_size(info);
     let addr_bytes = sfdp_addr_bytes(info.size_bytes);
     let quad = info.fast_read_114 || info.fast_read_144 || db.quad;

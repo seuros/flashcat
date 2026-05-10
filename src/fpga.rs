@@ -17,12 +17,25 @@ pub enum Voltage {
 }
 
 /// Cut VCC to the chip socket. Safe to call after an operation completes.
-/// LogicOff resets the SSPI interface (fw 1.19 note), but load() always
-/// reinitialises SSPI before the next bitstream, so this is safe post-op.
+///
+/// On FPGA boards (Pro5/Mach1) this sends LogicOff (0xC1), which actually drops
+/// the chip's VCC rail — unlike the official Windows app which deliberately
+/// skips LogicOff and leaves VCC on (USB.vb:474, "skip LOGIC_OFF — resets SSPI
+/// on fw 1.19"). We want VCC actually off to avoid powering the chip between
+/// operations.
+///
+/// LogicOff resets the firmware's SSPI state machine, so the next session must
+/// re-load the bitstream (load() always does this). We add a short post-op
+/// settling delay so the firmware finalises its shutdown sequence before our
+/// USB handle is dropped — without it, the next session sometimes hits
+/// "device disconnected" on the first ctrl transfer.
 pub async fn vcc_off(dev: &UsbDevice) -> Result<()> {
     info!("VCC off");
     if dev.kind.has_fpga() {
         dev.ctrl_out(UsbReq::LogicOff, 0, None).await?;
+        // 100ms settling for the FPGA power rail to fully discharge and the
+        // MCU firmware to commit the LogicOff state to its USB endpoints.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     } else {
         dev.ctrl_out(UsbReq::VccOff, 0, None).await?;
     }
@@ -53,6 +66,11 @@ pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
         Voltage::V1_8 => dev.ctrl_out(UsbReq::Logic1v8, 0, None).await?,
         Voltage::V5_0 => unreachable!(),
     }
+    // Mirrors official USB.vb USB_VCC_ON: Sleep(100) after LOGIC_3V3 — gives the
+    // FPGA's VCC rail time to ramp before we drive any SPI lines. Without this
+    // delay the first SpiInit/SpiSsEnable after a prior LogicOff can fail with
+    // "device disconnected".
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
     // SSPI init: (cs=1 << 24) | (mode=3 << 16) | speed=24
     let w32: u32 = (1u32 << 24) | (3u32 << 16) | 24u32;

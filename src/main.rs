@@ -316,6 +316,34 @@ pub(crate) async fn power_down_and_vcc_off(dev: &usb::UsbDevice) {
     }
 }
 
+/// Run `body` against the open device, racing it against Ctrl-C, and ensure
+/// `power_down_and_vcc_off(dev)` runs on every exit path — clean completion,
+/// body error, or user interrupt. Use this from every cmd_* that holds a
+/// `UsbDevice`; it replaces the old `let result = (async {...}).await;
+/// power_down_and_vcc_off(&dev).await; result` boilerplate.
+///
+/// SIGINT is the common "I want VCC off now" trigger. Without this wrapper a
+/// Ctrl-C during a long write/erase aborts the task without sending DPD or
+/// LogicOff, leaving the chip powered.
+pub(crate) async fn with_cleanup<F, T>(dev: &usb::UsbDevice, body: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    tokio::pin!(body);
+
+    let result = tokio::select! {
+        biased;
+        r = &mut body => r,
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!("\ninterrupted — cutting VCC");
+            Err(anyhow::anyhow!("interrupted by user"))
+        }
+    };
+
+    power_down_and_vcc_off(dev).await;
+    result
+}
+
 /// Unified prepare: resolve voltage (auto-probing if needed), return configured device + chip.
 pub(crate) async fn prepare(
     vc: VoltageChoice,

@@ -32,7 +32,7 @@ pub async fn erase_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
 /// as the key, so vendor-specific and SFDP-derived opcodes are always honoured.
 pub async fn erase_unit(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<()> {
     debug_assert!(
-        addr % chip.erase_size == 0,
+        addr.is_multiple_of(chip.erase_size),
         "erase_unit: addr {addr:#x} is not aligned to erase_size {:#x}", chip.erase_size
     );
     let et = chip.erase_types.iter()
@@ -78,16 +78,18 @@ pub async fn erase_unit(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Resu
 /// Prefers the largest matching block first; falls back to the smallest advertised size.
 pub(crate) fn pick_erase_op(addr: u32, remaining_bytes: u32, erase_types: &[EraseType]) -> Result<(u8, u32)> {
     // Try 64KB.
-    if addr % 65536 == 0 && remaining_bytes >= 65536 {
-        if let Some(et) = erase_types.iter().find(|e| e.size_bytes == 65536) {
-            return Ok((et.opcode, 65536));
-        }
+    if addr.is_multiple_of(65536)
+        && remaining_bytes >= 65536
+        && let Some(et) = erase_types.iter().find(|e| e.size_bytes == 65536)
+    {
+        return Ok((et.opcode, 65536));
     }
     // Try 32KB.
-    if addr % 32768 == 0 && remaining_bytes >= 32768 {
-        if let Some(et) = erase_types.iter().find(|e| e.size_bytes == 32768) {
-            return Ok((et.opcode, 32768));
-        }
+    if addr.is_multiple_of(32768)
+        && remaining_bytes >= 32768
+        && let Some(et) = erase_types.iter().find(|e| e.size_bytes == 32768)
+    {
+        return Ok((et.opcode, 32768));
     }
     // Caller guarantees a 4KB erase type is present; find it explicitly.
     let sector = erase_types
@@ -109,7 +111,7 @@ pub(crate) async fn erase_unit_opcode(
     // The minimum erase granularity in mixed-erase mode is 4 KiB; every addr
     // supplied by erase_range_mixed is derived from 4 KiB-aligned arithmetic.
     debug_assert!(
-        addr % 4096 == 0,
+        addr.is_multiple_of(4096),
         "erase_unit_opcode: addr {addr:#x} is not 4 KiB-aligned"
     );
     write_enable(dev).await?;

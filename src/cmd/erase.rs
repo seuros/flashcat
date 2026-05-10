@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::bios::layout;
 use crate::spi::{self, SpiSpeed};
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, with_cleanup, VoltageChoice};
 
 pub async fn cmd_erase(
     vc: VoltageChoice,
@@ -15,7 +15,7 @@ pub async fn cmd_erase(
     region: Option<String>,
 ) -> Result<()> {
     let (dev, chip, _voltage) = prepare(vc, speed).await?;
-    let result = (async {
+    with_cleanup(&dev, async {
         let (eff_offset, eff_length) = if let Some(ref rname) = region {
             let source = match &layout {
                 Some(p) => layout::RegionSource::LayoutFile(p.clone()),
@@ -57,7 +57,5 @@ pub async fn cmd_erase(
             }
         }
         Ok(())
-    }).await;
-    power_down_and_vcc_off(&dev).await;
-    result
+    }).await
 }

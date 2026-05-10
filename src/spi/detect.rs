@@ -50,10 +50,7 @@ pub async fn detect(dev: &UsbDevice, voltage: Voltage) -> Result<Option<Resolved
             "RDID {:#04x}:{:#04x}:{:#04x} not in DB, falling back to SFDP",
             id[0], id[1], id[2]
         );
-        match sfdp::try_read_sfdp(dev).await {
-            Some(info) => Some(sfdp::sfdp_to_resolved(&info, id, voltage)),
-            None => None,
-        }
+        sfdp::try_read_sfdp(dev).await.map(|info| sfdp::sfdp_to_resolved(&info, id, voltage))
     } else {
         chip
     };
@@ -147,7 +144,7 @@ pub fn detect_from_id(id: [u8; 3], voltage: Voltage) -> Result<Option<ResolvedCh
         return Ok(Some(crate::spi::probe::db_chip_to_resolved_pub(smallest)));
     }
 
-    return Ok(Some(crate::spi::probe::db_chip_to_resolved_pub(voltage_matches[0])));
+    Ok(Some(crate::spi::probe::db_chip_to_resolved_pub(voltage_matches[0])))
 }
 
 pub async fn rdid(dev: &UsbDevice) -> Result<[u8; 3]> {

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::bios::layout;
 use crate::spi::{self, SpiSpeed};
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, with_cleanup, VoltageChoice};
 
 pub struct CompareOpts {
     pub vc: VoltageChoice,
@@ -20,7 +20,7 @@ pub async fn cmd_compare(opts: CompareOpts) -> Result<()> {
     let expected = std::fs::read(&opts.file)
         .with_context(|| format!("failed to read {}", opts.file.display()))?;
     let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
-    let result = (async {
+    with_cleanup(&dev, async {
         let (eff_offset, eff_length) = if let Some(ref rname) = opts.region {
             let source = match &opts.layout {
                 Some(p) => layout::RegionSource::LayoutFile(p.clone()),
@@ -84,9 +84,7 @@ pub async fn cmd_compare(opts: CompareOpts) -> Result<()> {
             println!("      Re-write with `write --erase --verify` or `write --smart --verify`.");
         }
         anyhow::bail!("verification failed")
-    }).await;
-    power_down_and_vcc_off(&dev).await;
-    result
+    }).await
 }
 
 pub(crate) fn probable_missing_erase(expected: &[u8], actual: &[u8]) -> bool {

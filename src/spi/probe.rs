@@ -92,9 +92,12 @@ async fn resolve_chip(
                 let chip = match sfdp::try_read_sfdp(dev).await {
                     Some(sfdp_info) => sfdp::merge_db_with_sfdp(db_chip, &sfdp_info),
                     None => {
-                        warn!(
-                            "{} identified via RDID but SFDP is absent — \
-                             using DB parameters only (possible counterfeit or non-JESD216 chip)",
+                        // Many genuine pre-JESD216 parts have no SFDP at all (early
+                        // Macronix MX25L6406E, older Winbond W25Q*). The official
+                        // fcusb app never even queries SFDP. Don't paint these as
+                        // counterfeit — only log at info level.
+                        info!(
+                            "{} identified via RDID; SFDP not available — using DB parameters",
                             db_chip.name
                         );
                         db_chip_to_resolved(db_chip)

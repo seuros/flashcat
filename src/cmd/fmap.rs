@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::bios::{amd_psp, efifv, ifd, layout};
 use crate::spi::{self, SpiSpeed};
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, with_cleanup, VoltageChoice};
 
 pub async fn cmd_fmap(
     vc: VoltageChoice,
@@ -23,11 +23,12 @@ pub async fn cmd_fmap(
             let (dev, chip, _voltage) = prepare(vc, speed).await?;
             let actual_limit = scan_limit.min(chip.size_bytes);
             println!("Scanning {} bytes of {} ...", actual_limit, chip.name);
-            let result = spi::read(&dev, &chip, 0, actual_limit, false).await;
             let sz = chip.size_bytes;
             let name = chip.name.clone();
-            power_down_and_vcc_off(&dev).await;
-            (result?, name, Some(sz))
+            let bytes = with_cleanup(&dev, async {
+                spi::read(&dev, &chip, 0, actual_limit, false).await
+            }).await?;
+            (bytes, name, Some(sz))
         }
     };
 

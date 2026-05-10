@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::bios::layout;
 use crate::spi::{self, SpiSpeed};
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, with_cleanup, VoltageChoice};
 
 pub struct ReadOpts {
     pub vc: VoltageChoice,
@@ -20,9 +20,7 @@ pub struct ReadOpts {
 
 pub async fn cmd_read(opts: ReadOpts) -> Result<()> {
     let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
-    let result = run(&dev, &chip, &opts).await;
-    power_down_and_vcc_off(&dev).await;
-    result
+    with_cleanup(&dev, run(&dev, &chip, &opts)).await
 }
 
 async fn run(

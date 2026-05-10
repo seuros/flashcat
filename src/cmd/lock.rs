@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 
 use crate::spi::{self, SpiSpeed};
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, with_cleanup, VoltageChoice};
 
 pub async fn cmd_block_lock(
     vc: VoltageChoice,
@@ -15,7 +15,7 @@ pub async fn cmd_block_lock(
         _ => {}
     }
     let (dev, chip, _) = prepare(vc, speed).await?;
-    let result = (async {
+    with_cleanup(&dev, async {
         if global {
             spi::global_lock(&dev, &chip).await?;
             let wp = spi::read_wp_status(&dev, &chip).await?;
@@ -39,9 +39,7 @@ pub async fn cmd_block_lock(
         }
         Ok(())
     })
-    .await;
-    power_down_and_vcc_off(&dev).await;
-    result
+    .await
 }
 
 pub async fn cmd_block_unlock(
@@ -56,7 +54,7 @@ pub async fn cmd_block_unlock(
         _ => {}
     }
     let (dev, chip, _) = prepare(vc, speed).await?;
-    let result = (async {
+    with_cleanup(&dev, async {
         if global {
             spi::global_unlock(&dev, &chip).await?;
             let wp = spi::read_wp_status(&dev, &chip).await?;
@@ -79,7 +77,5 @@ pub async fn cmd_block_unlock(
         }
         Ok(())
     })
-    .await;
-    power_down_and_vcc_off(&dev).await;
-    result
+    .await
 }

@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 
 use crate::spi::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
 use crate::spi::SpiSpeed;
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, with_cleanup, VoltageChoice};
 
 // Manufacturers that support READ UNIQUE ID (0x4B): 4 dummy bytes + 8-byte UID
 const MFR_WINBOND:   u8 = 0xEF;
@@ -12,7 +12,7 @@ const MFR_EON:       u8 = 0x1C;
 
 pub async fn cmd_uid(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
     let (dev, chip, _voltage) = prepare(vc, speed).await?;
-    let result = (async {
+    with_cleanup(&dev, async {
         let uid = match chip.mfr {
             MFR_WINBOND | MFR_GIGADEVICE | MFR_ISSI | MFR_EON => {
                 read_uid_4b(&dev).await?
@@ -35,9 +35,7 @@ pub async fn cmd_uid(vc: VoltageChoice, speed: SpiSpeed) -> Result<()> {
         }
 
         Ok(())
-    }).await;
-    power_down_and_vcc_off(&dev).await;
-    result
+    }).await
 }
 
 /// READ UNIQUE ID: opcode 0x4B + 4 dummy bytes + 8-byte UID (Winbond/GigaDevice/ISSI/Eon)

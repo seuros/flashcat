@@ -8,9 +8,18 @@ pub struct EraseType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamSource {
+    /// RDID matched the chip DB; no SFDP was queried or SFDP was absent.
     Database,
+    /// SFDP returned valid data and we built the chip purely from it
+    /// (no DB match for the RDID).
     Sfdp,
+    /// RDID matched the chip DB and SFDP returned a full JESD216A+ basic table;
+    /// we use SFDP geometry overlaid on DB metadata.
     DatabaseWithSfdp,
+    /// RDID matched the chip DB and SFDP returned a *partial* basic table
+    /// (pre-JESD216A, density-only). We trust DB params but cross-validate
+    /// density against SFDP DW2 — common on early Macronix MX25L6406E.
+    DatabaseWithPartialSfdp,
 }
 
 /// Runtime chip descriptor, built from DB and/or SFDP data.

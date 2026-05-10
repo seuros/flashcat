@@ -100,7 +100,14 @@ impl UsbDevice {
         let mut ep = self.iface.endpoint::<Bulk, Out>(EP_BULK_OUT)?;
         ep.submit(data.into());
         let completion = ep.next_complete().await;
-        completion.status.context("bulk_out failed")?;
+        if let Err(e) = completion.status {
+            // Matches official fcusb USB.vb:401 — bulk transfer failure can stall the
+            // EP; the firmware's ABORT request clears that state so subsequent
+            // ctrl_out/bulk_in transfers don't fail with stale "device disconnected"
+            // errors that are actually endpoint stalls.
+            self.abort().await;
+            bail!("bulk_out failed: {e}");
+        }
         Ok(())
     }
 

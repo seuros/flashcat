@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::bios::layout;
 use crate::spi::{self, SpiSpeed};
-use crate::{power_down_and_vcc_off, prepare, VoltageChoice};
+use crate::{prepare, with_cleanup, VoltageChoice};
 
 use super::compare::probable_missing_erase;
 
@@ -22,7 +22,7 @@ pub struct WriteOpts {
 
 pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
     let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
-    let result = (async {
+    with_cleanup(&dev, async {
         let data = std::fs::read(&opts.file)
             .with_context(|| format!("failed to read {}", opts.file.display()))?;
 
@@ -78,10 +78,8 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
             spi::write(&dev, &chip, eff_offset, &data).await?;
             println!("Written {} bytes", data.len());
         } else {
-            // Default: smart write (read-compare-erase-write with optimal erase granularity).
             info!("smart write: {} bytes to {} at {eff_offset:#010x}", data.len(), chip.name);
             spi::write_smart(&dev, &chip, eff_offset, &data).await?;
-            println!("Written {} bytes", data.len());
         }
 
         if opts.verify {
@@ -99,7 +97,5 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
             println!("Verify:  OK");
         }
         Ok(())
-    }).await;
-    power_down_and_vcc_off(&dev).await;
-    result
+    }).await
 }
