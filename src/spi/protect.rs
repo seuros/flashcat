@@ -3,6 +3,7 @@ use std::time::Duration;
 use tracing::debug;
 
 use crate::chip::ResolvedChip;
+use crate::units::MB_16;
 use crate::usb::UsbDevice;
 
 use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
@@ -176,7 +177,7 @@ pub async fn protect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     //   Winbond W25Q256+ (MFR=0xEF, >16MB): 4-bit BP layout — BP3(6)|BP2(5)|BP1(4)|BP0(3)|TB(2), set_mask=0x78
     //   All others (Macronix, EON, GigaDevice, ISSI, etc.): 3-bit BP layout — bit 6 is QE/SEC, set_mask=0x1C
     // preserve_mask 0x83 = 1000_0011: keeps SRP0(7) and WIP/WEL(1:0), clears SEC/BP3 at bit 6.
-    let is_winbond_4bit_bp = chip.mfr == MFR_WINBOND && chip.size_bytes > 16 * 1024 * 1024;
+    let is_winbond_4bit_bp = chip.mfr == MFR_WINBOND && chip.size_bytes > MB_16;
     let (preserve_mask, set_mask, verify_mask) = if is_winbond_4bit_bp {
         // W25Q256+: 4-bit BP layout, BP3 at bit 6
         (0x83u8, 0x78u8, 0x78u8)
@@ -241,7 +242,7 @@ pub async fn unprotect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> 
     // Verify — BP bits (and SEC/TB) should all be zero now.
     // Winbond W25Q256+ (4-bit BP): check BP3(6)|BP2(5)|BP1(4)|BP0(3), mask 0x78.
     // All others (3-bit BP): check SEC(6)|TB(5)|BP2(4)|BP1(3)|BP0(2), mask 0x7C.
-    let is_winbond_4bit_bp = chip.mfr == MFR_WINBOND && chip.size_bytes > 16 * 1024 * 1024;
+    let is_winbond_4bit_bp = chip.mfr == MFR_WINBOND && chip.size_bytes > MB_16;
     let check_mask = if is_winbond_4bit_bp { 0x78u8 } else { 0x7Cu8 };
     let readback = read_sr(dev, 0x05).await?;
     if readback & check_mask != 0 {

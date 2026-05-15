@@ -256,7 +256,7 @@ pub async fn resolve_region(
     let regions: Vec<Region> = match source {
         RegionSource::LayoutFile(path) => parse_layout_file(&path)?,
         RegionSource::FmapScan => {
-            let scan_limit = chip.size_bytes.min(4 * 1024 * 1024);
+            let scan_limit = chip.size_bytes.min(crate::units::MB_4);
             let data = crate::spi::read(dev, chip, 0, scan_limit, false).await?;
             match scan_fmap(&data) {
                 Some((hdr, areas)) => fmap_to_regions(&hdr, &areas),

@@ -12,6 +12,7 @@ mod fpga;
 mod progress;
 mod programmer;
 mod spi;
+mod units;
 mod usb;
 
 pub(crate) use chip::ResolvedChip;
@@ -178,6 +179,9 @@ enum Cmd {
     /// Read the chip's unique 64-bit serial number
     Uid,
 
+    /// Decode SR1/SR2/SR3 status registers (per-chip)
+    Status,
+
     /// Protect entire chip (sets BP=all, survives power cycle)
     Protect,
 
@@ -278,6 +282,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Fmap { scan_limit, file } => cmd::cmd_fmap(vc, speed, *scan_limit, file.clone()).await,
         Cmd::Uid => cmd::cmd_uid(vc, speed).await,
+        Cmd::Status => cmd::cmd_status(vc, speed).await,
         Cmd::Protect => cmd::cmd_protect(vc, speed).await,
         Cmd::Unprotect => cmd::cmd_unprotect(vc, speed).await,
         Cmd::BlockLock { global, addr } => cmd::cmd_block_lock(vc, speed, *global, *addr).await,
