@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::chip::ResolvedChip;
 use crate::progress::Progress;
@@ -57,6 +57,49 @@ pub(crate) async fn try_read_block(
 
     if result.len() != len as usize {
         bail!("short read: {} of {}", result.len(), len);
+    }
+    Ok(result)
+}
+
+/// Read `length` bytes `passes` times and return a bitwise majority-voted result.
+/// `passes` must be ≥ 3. Useful for chips with defective cells that occasionally flip bits on read.
+pub async fn majority_read(
+    dev: &UsbDevice,
+    chip: &ResolvedChip,
+    offset: u32,
+    length: u32,
+    legacy: bool,
+    passes: u32,
+) -> Result<Vec<u8>> {
+    assert!(passes >= 3, "passes must be >= 3");
+    info!("majority read: {passes} passes over {length} bytes at {offset:#010x}");
+
+    let mut reads: Vec<Vec<u8>> = Vec::with_capacity(passes as usize);
+    for pass in 0..passes {
+        let mut pb = Progress::new(&format!("Reading ({}/{})", pass + 1, passes), length as u64);
+        let mut data = Vec::with_capacity(length as usize);
+        let mut addr = offset;
+        let end = offset + length;
+        while addr < end {
+            let block = BLOCK_SIZE.min(end - addr);
+            let chunk = read_block(dev, chip, addr, block, legacy).await?;
+            data.extend_from_slice(&chunk);
+            addr += block;
+            pb.inc(block as u64);
+        }
+        pb.finish();
+        reads.push(data);
+    }
+
+    let len = length as usize;
+    let mut result = vec![0u8; len];
+    for i in 0..len {
+        for bit in 0..8u8 {
+            let ones: u32 = reads.iter().map(|r| ((r[i] >> bit) & 1) as u32).sum();
+            if ones * 2 > passes {
+                result[i] |= 1 << bit;
+            }
+        }
     }
     Ok(result)
 }

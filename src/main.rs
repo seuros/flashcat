@@ -104,6 +104,16 @@ enum Cmd {
         /// Region name to read (requires --layout or uses FMAP scan)
         #[arg(long, value_name = "NAME")]
         region: Option<String>,
+        /// Read N times and use majority voting to recover from defective cells.
+        /// --read-repeated (no value) defaults to 3. Range: 3–100.
+        #[arg(
+            long,
+            value_name = "N",
+            num_args = 0..=1,
+            default_missing_value = "3",
+            help = "Read N times (3–100, default 3) and majority-vote each bit (matches flashrom API)"
+        )]
+        read_repeated: Option<u32>,
     },
 
     /// Write file to flash (auto-detects voltage; --erase/--verify optional)
@@ -242,7 +252,12 @@ async fn main() -> Result<()> {
         Cmd::Check => cmd::cmd_check().await,
         Cmd::Watch => cmd::cmd_watch(vc, speed).await,
         Cmd::Detect => cmd::cmd_detect(vc, speed).await,
-        Cmd::Read { file, offset, length, quad, legacy_read, layout, region } => {
+        Cmd::Read { file, offset, length, quad, legacy_read, layout, region, read_repeated } => {
+            let passes = match read_repeated {
+                Some(n) if *n < 3 || *n > 100 => bail!("--read-repeated must be between 3 and 100"),
+                Some(n) => *n,
+                None => 1,
+            };
             cmd::cmd_read(cmd::ReadOpts {
                 vc, speed,
                 file: file.clone(),
@@ -252,6 +267,7 @@ async fn main() -> Result<()> {
                 legacy_read: *legacy_read,
                 layout: layout.clone(),
                 region: region.clone(),
+                passes,
             }).await
         }
         Cmd::Write { file, offset, erase, verify, smart, layout, region } => {

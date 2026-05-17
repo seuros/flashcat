@@ -16,6 +16,8 @@ pub struct ReadOpts {
     pub legacy_read: bool,
     pub layout: Option<PathBuf>,
     pub region: Option<String>,
+    /// Number of read passes for majority-vote bit-flip recovery (1 = disabled, 3–100 active).
+    pub passes: u32,
 }
 
 pub async fn cmd_read(opts: ReadOpts) -> Result<()> {
@@ -74,6 +76,8 @@ async fn run(
         spi::sqi_setup(dev, opts.speed.0).await?;
         spi::enable_quad(dev, chip.mfr).await?;
         spi::read_quad(dev, chip, eff_offset, len).await?
+    } else if opts.passes > 1 {
+        spi::majority_read(dev, chip, eff_offset, len, opts.legacy_read, opts.passes).await?
     } else {
         spi::read(dev, chip, eff_offset, len, opts.legacy_read).await?
     };
