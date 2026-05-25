@@ -8,17 +8,18 @@ use crate::usb::UsbDevice;
 use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
 use super::write::write_enable;
 
-const MFR_WINBOND: u8 = 0xEF;
+const MFR_WINBOND:    u8 = 0xEF;
+const MFR_GIGADEVICE: u8 = 0xC8;
 
-fn require_winbond(chip: &ResolvedChip) -> Result<()> {
-    if chip.mfr != MFR_WINBOND {
-        bail!(
-            "block lock is Winbond-specific (mfr={:#04x} {})",
+fn require_block_lock_support(chip: &ResolvedChip) -> Result<()> {
+    match chip.mfr {
+        MFR_WINBOND | MFR_GIGADEVICE => Ok(()),
+        _ => bail!(
+            "per-block lock not supported for mfr={:#04x} {}",
             chip.mfr,
             chip.name
-        );
+        ),
     }
-    Ok(())
 }
 
 /// Build the address byte sequence for a given chip (3 or 4 bytes, big-endian).
@@ -42,7 +43,7 @@ fn addr_vec(chip: &ResolvedChip, addr: u32) -> Vec<u8> {
 /// Read the lock status of the block containing `addr`.
 /// Returns true if the block is locked (bit 0 of the response byte is set).
 pub async fn read_block_lock(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<bool> {
-    require_winbond(chip)?;
+    require_block_lock_support(chip)?;
     if addr >= chip.size_bytes {
         bail!("address {addr:#010x} is out of range for {} (size {:#010x})", chip.name, chip.size_bytes);
     }
@@ -65,7 +66,7 @@ pub async fn read_block_lock(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) ->
 /// Lock the block containing `addr` (volatile, requires WREN).
 /// IND_BLOCK_LOCK (0x36) completes in < 1 µs — no WIP polling needed.
 pub async fn lock_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<()> {
-    require_winbond(chip)?;
+    require_block_lock_support(chip)?;
     if addr >= chip.size_bytes {
         bail!("address {addr:#010x} is out of range for {} (size {:#010x})", chip.name, chip.size_bytes);
     }
@@ -83,7 +84,7 @@ pub async fn lock_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Resu
 /// Unlock the block containing `addr` (volatile, requires WREN).
 /// IND_BLOCK_UNLOCK (0x39) completes in < 1 µs — no WIP polling needed.
 pub async fn unlock_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<()> {
-    require_winbond(chip)?;
+    require_block_lock_support(chip)?;
     if addr >= chip.size_bytes {
         bail!("address {addr:#010x} is out of range for {} (size {:#010x})", chip.name, chip.size_bytes);
     }
@@ -101,7 +102,7 @@ pub async fn unlock_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Re
 /// Lock all blocks globally (volatile, ~200µs typical, requires WREN).
 /// A 1 ms sleep is sufficient; WIP polling is not needed for this operation.
 pub async fn global_lock(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
-    require_winbond(chip)?;
+    require_block_lock_support(chip)?;
     write_enable(dev).await?;
     ss_enable(dev).await?;
     let r = spibus_write(dev, &[0x7E]).await; // GLOBAL_BLOCK_LOCK
@@ -115,7 +116,7 @@ pub async fn global_lock(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
 /// Unlock all blocks globally (volatile, ~200µs typical, requires WREN).
 /// A 1 ms sleep is sufficient; WIP polling is not needed for this operation.
 pub async fn global_unlock(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
-    require_winbond(chip)?;
+    require_block_lock_support(chip)?;
     write_enable(dev).await?;
     ss_enable(dev).await?;
     let r = spibus_write(dev, &[0x98]).await; // GLOBAL_BLOCK_UNLOCK

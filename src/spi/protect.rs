@@ -7,6 +7,7 @@ use crate::units::MB_16;
 use crate::usb::UsbDevice;
 
 use super::bus::{spibus_read, spibus_write, ss_disable, ss_enable};
+use super::lock::{global_lock, global_unlock};
 
 const MFR_WINBOND:    u8 = 0xEF;
 const MFR_GIGADEVICE: u8 = 0xC8;
@@ -159,11 +160,13 @@ async fn write_sr_bytes(
     bail!("timeout waiting for SR write to complete");
 }
 
-/// Protect the entire chip: sets BP[2:0]=111, clears TB/SEC/CMP.
+/// Protect the entire chip.
 ///
-/// For Winbond/GigaDevice: writes SR1 via 0x01, clears CMP in SR2 via 0x31.
-/// For all other vendors: writes SR1 via 0x01.
+/// If SR3.WPS=1 (block-lock mode) on a Winbond/GigaDevice part, issues
+/// GLOBAL_BLOCK_LOCK (0x7E) instead of manipulating BP bits — the BP range
+/// has no effect when per-block locks are active.
 ///
+/// Otherwise: sets BP[2:0]=111, clears TB/SEC/CMP via WRSR (0x01).
 /// Uses non-volatile WREN (0x06) so protection survives power cycles.
 pub async fn protect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     let sr1 = read_sr(dev, 0x05).await?;
@@ -171,6 +174,15 @@ pub async fn protect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     // Check SRP — if hardware-locked, writes will be silently ignored.
     if sr1 & 0x80 != 0 {
         bail!("SRP0 is set — status register is hardware-write-protected (WP# pin or permanent)");
+    }
+
+    // In block-lock mode (WPS=1) BP bits are overridden; use global block lock.
+    if matches!(chip.mfr, MFR_WINBOND | MFR_GIGADEVICE) {
+        let sr3 = read_sr(dev, 0x15).await?;
+        if (sr3 >> 2) & 0x01 == 1 {
+            debug!("protect: WPS=1 — using GLOBAL_BLOCK_LOCK instead of BP bits");
+            return global_lock(dev, chip).await;
+        }
     }
 
     // Pick the right BP layout based on manufacturer and chip size:
@@ -211,15 +223,27 @@ pub async fn protect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     Ok(())
 }
 
-/// Unprotect the entire chip: clears BP[2:0], TB, SEC, and CMP.
+/// Unprotect the entire chip.
 ///
-/// For Winbond/GigaDevice: also clears CMP in SR2 via 0x31.
+/// If SR3.WPS=1 (block-lock mode) on a Winbond/GigaDevice part, issues
+/// GLOBAL_BLOCK_UNLOCK (0x98) instead of clearing BP bits.
+///
+/// Otherwise: clears BP[2:0], TB, SEC, and CMP via WRSR (0x01).
 /// Uses non-volatile WREN (0x06).
 pub async fn unprotect_chip(dev: &UsbDevice, chip: &ResolvedChip) -> Result<()> {
     let sr1 = read_sr(dev, 0x05).await?;
 
     if sr1 & 0x80 != 0 {
         bail!("SRP0 is set — status register is hardware-write-protected (WP# pin or permanent)");
+    }
+
+    // In block-lock mode (WPS=1) BP bits are overridden; use global block unlock.
+    if matches!(chip.mfr, MFR_WINBOND | MFR_GIGADEVICE) {
+        let sr3 = read_sr(dev, 0x15).await?;
+        if (sr3 >> 2) & 0x01 == 1 {
+            debug!("unprotect: WPS=1 — using GLOBAL_BLOCK_UNLOCK instead of BP bits");
+            return global_unlock(dev, chip).await;
+        }
     }
 
     // Clear BP[2:0](4:2), TB(5), SEC(6); preserve SRP0(7), WIP(0), WEL(1).
