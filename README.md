@@ -62,6 +62,15 @@ flashcat regions --file firmware.layout
 # Read the chip's unique 64-bit serial number (counterfeit detection)
 flashcat uid
 
+# Dump all OTP security registers (Winbond/GigaDevice, opcode 0x48)
+flashcat otp read
+
+# Dump one register to a file
+flashcat otp read --reg 1 -f otp1.bin
+
+# Show OTP lock bits LB1-3 (whether each register is permanently locked)
+flashcat otp lock-status
+
 # Protect entire chip (sets all BP bits, survives power cycle)
 flashcat protect
 
@@ -193,6 +202,26 @@ density when possible.
 `flashcat uid` reads the chip's 64-bit factory serial number (opcode 0x4B). Winbond and most
 modern SPI NOR flash support this. The output includes a counterfeit-likelihood assessment
 based on whether the UID is blank (0x00…/0xFF…), a known bad pattern, or plausible.
+
+## OTP security registers
+
+`flashcat otp read` dumps the chip's one-time-programmable security registers (opcode
+`0x48`), where vendors stash board serials, MAC addresses, and provisioning data. The
+address width follows the chip's active mode (3- or 4-byte), so 256Mb parts in 4-byte mode
+are handled automatically.
+
+| Manufacturer | Layout |
+|--------------|--------|
+| Winbond | 3 × 256 bytes |
+| GigaDevice (≤128Mb) | 3 × 1024 bytes |
+| GigaDevice (256Mb) | 3 × 2048 bytes |
+
+`flashcat otp lock-status` decodes the LB1-3 OTP lock bits (SR2 bits 3-5). Once an LB bit
+is set, that register is **permanently** read-only — flashcat only reads OTP, it does not
+program or lock it.
+
+EON, ISSI, and Macronix gate OTP behind a separate enter-OTP-mode opcode and are not yet
+supported.
 
 ## Supported chips
 

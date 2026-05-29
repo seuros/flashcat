@@ -223,6 +223,27 @@ enum Cmd {
         #[arg(short, long)]
         file: PathBuf,
     },
+
+    /// Read OTP security registers (Winbond/GigaDevice, opcode 0x48)
+    Otp {
+        #[command(subcommand)]
+        action: OtpCmd,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum OtpCmd {
+    /// Dump security register(s) to stdout (hexdump) or a file
+    Read {
+        /// Register number to read (1-based); omit to read all
+        #[arg(long, value_parser = parse_hex_or_dec)]
+        reg: Option<u32>,
+        /// Write raw register bytes to this file instead of hexdumping
+        #[arg(short, long, value_name = "FILE")]
+        file: Option<PathBuf>,
+    },
+    /// Show OTP lock bits LB1-3 (whether each register is permanently locked)
+    LockStatus,
 }
 
 #[tokio::main]
@@ -304,6 +325,12 @@ async fn main() -> Result<()> {
         Cmd::BlockLock { global, addr } => cmd::cmd_block_lock(vc, speed, *global, *addr).await,
         Cmd::BlockUnlock { global, addr } => cmd::cmd_block_unlock(vc, speed, *global, *addr).await,
         Cmd::Regions { file } => cmd::cmd_regions(file.clone()).await,
+        Cmd::Otp { action } => match action {
+            OtpCmd::Read { reg, file } => {
+                cmd::cmd_otp_read(vc, speed, reg.map(|r| r as u8), file.clone()).await
+            }
+            OtpCmd::LockStatus => cmd::cmd_otp_lock_status(vc, speed).await,
+        },
     }
 }
 
