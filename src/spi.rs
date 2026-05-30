@@ -15,7 +15,7 @@ pub(crate) mod read;
 pub mod sfdp;
 mod write;
 
-pub(crate) use bus::deep_power_down;
+pub(crate) use bus::{deep_power_down, release_deep_power_down};
 pub use detect::detect;
 pub use erase::{erase_chip, erase_range};
 pub use lock::{global_lock, global_unlock, lock_block, read_block_lock, unlock_block};
@@ -64,5 +64,11 @@ pub async fn init(dev: &UsbDevice, speed: SpiSpeed) -> Result<()> {
         .await
         .context("SPI_INIT failed")?;
     tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Wake the chip if a prior session left it in Deep Power-Down. Only 0xAB
+    // releases DPD; without this, the first RDID of every new invocation reads
+    // blank → "no chip detected" whenever residual power kept the part asleep
+    // across the VCC cut. No-op on an already-awake chip.
+    release_deep_power_down(dev).await?;
     Ok(())
 }

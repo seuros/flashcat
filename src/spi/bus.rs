@@ -4,11 +4,14 @@ use std::time::Duration;
 use crate::usb::{UsbDevice, UsbReq};
 
 const CMD_DEEP_POWER_DOWN: u8 = 0xB9;
+const CMD_RELEASE_DEEP_POWER_DOWN: u8 = 0xAB;
 const CMD_READ_STATUS: u8 = 0x05;
 const STATUS_WIP: u8 = 0x01;
 const DEEP_POWER_DOWN_ENTRY_DELAY: Duration = Duration::from_millis(1);
 const DEEP_POWER_DOWN_READY_POLL_DELAY: Duration = Duration::from_millis(5);
 const DEEP_POWER_DOWN_READY_POLLS: u8 = 20;
+// tRES1 (release-from-DPD to standby) is ~30 us typ for N25Q; 1 ms covers all parts.
+const RELEASE_DEEP_POWER_DOWN_DELAY: Duration = Duration::from_millis(1);
 
 // SPI_WR_DATA: ctrl_out arms transfer, bulk_out must follow without delay
 pub(crate) async fn spibus_write(dev: &UsbDevice, data: &[u8]) -> Result<()> {
@@ -79,6 +82,24 @@ pub(crate) async fn deep_power_down(dev: &UsbDevice) -> Result<()> {
     disable_result?;
 
     tokio::time::sleep(DEEP_POWER_DOWN_ENTRY_DELAY).await;
+    Ok(())
+}
+
+/// Send Release from Deep Power-Down (0xAB) to wake a chip that a prior session
+/// left in DPD via `deep_power_down()` (0xB9). A chip in DPD ignores every
+/// command *except* 0xAB — software reset (0x66/0x99) and RDID (0x9F) all read
+/// blank — so without this, back-to-back invocations report "no chip detected"
+/// whenever residual clip/IO power kept the part asleep across the VCC cut.
+/// Harmless no-op if the chip is already awake.
+pub(crate) async fn release_deep_power_down(dev: &UsbDevice) -> Result<()> {
+    ss_enable(dev).await?;
+    let write_result = spibus_write(dev, &[CMD_RELEASE_DEEP_POWER_DOWN]).await;
+    let disable_result = ss_disable(dev).await;
+
+    write_result?;
+    disable_result?;
+
+    tokio::time::sleep(RELEASE_DEEP_POWER_DOWN_DELAY).await;
     Ok(())
 }
 
