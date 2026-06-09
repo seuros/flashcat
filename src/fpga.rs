@@ -36,9 +36,8 @@ pub async fn vcc_off(dev: &UsbDevice) -> Result<()> {
         // 100ms settling for the FPGA power rail to fully discharge and the
         // MCU firmware to commit the LogicOff state to its USB endpoints.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    } else {
-        dev.ctrl_out(UsbReq::VccOff, 0, None).await?;
     }
+    // Classic / xPort: no software VCC — USB_VCC_OFF is a no-op (source: USB.vb).
     Ok(())
 }
 
@@ -57,6 +56,7 @@ pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
         (Programmer::Mach1, Voltage::V1_8) => BITSTREAM_MACH1_1V8,
         (_, Voltage::V5_0) => bail!("FPGA programmers do not support 5V"),
         (Programmer::Classic, _) => unreachable!("Classic has no FPGA"),
+        (Programmer::Xport, _) => unreachable!("xPort has no FPGA"),
     };
 
     info!("loading FPGA bitstream ({:?} {voltage:?}, {} bytes)", dev.kind, bitstream.len());
@@ -116,14 +116,10 @@ pub async fn set_vcc(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
         // Pro/Mach1: VCC managed by Logic3v3/Logic1v8 already sent in load()
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     } else {
-        // Classic: separate VCC control; supports 3.3V and 5V
-        match voltage {
-            Voltage::V3_3 => dev.ctrl_out(UsbReq::Vcc3v, 0, None).await?,
-            Voltage::V5_0 => dev.ctrl_out(UsbReq::Vcc5v, 0, None).await?,
-            Voltage::V1_8 => bail!("Classic does not support 1.8V"),
-        }
-        dev.ctrl_out(UsbReq::VccOn, 0, None).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        // Classic / xPort have no software VCC control — target voltage is set
+        // by the board's physical switch. USB_VCC_ON is a no-op on these
+        // (source: USB.vb, gated by HasLogic); sending VCC_3V/5V STALLs.
+        let _ = voltage;
     }
     Ok(())
 }

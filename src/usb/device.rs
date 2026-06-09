@@ -120,11 +120,18 @@ impl UsbDevice {
     }
 
     pub async fn firmware_version(&self) -> Result<String> {
+        let (_, ver) = self.version_raw().await?;
+        Ok(ver)
+    }
+
+    /// Raw VERSION response: `(board_type_byte, "X.YZ")`.
+    /// b[0]=board type, b[1..3]=ASCII version e.g. '1','1','9' → "1.19".
+    pub async fn version_raw(&self) -> Result<(u8, String)> {
         let b = self.ctrl_in(UsbReq::Version, 0, 4).await?;
         if b.len() < 4 {
             bail!("short version response");
         }
-        // b[0]=board type, b[1..3]=ASCII version e.g. '1','1','9' → "1.19"
-        Ok(format!("{}.{}{}", b[1] as char, b[2] as char, b[3] as char))
+        Ok((b[0], format!("{}.{}{}", b[1] as char, b[2] as char, b[3] as char)))
     }
+
 }

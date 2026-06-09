@@ -1,6 +1,7 @@
 mod check;
 mod compare;
 mod detect;
+mod devices;
 mod erase;
 mod fmap;
 mod lock;
@@ -17,6 +18,7 @@ mod write;
 pub use check::cmd_check;
 pub use compare::{cmd_compare, CompareOpts};
 pub use detect::cmd_detect;
+pub use devices::cmd_devices;
 pub use erase::cmd_erase;
 pub use fmap::cmd_fmap;
 pub use lock::{cmd_block_lock, cmd_block_unlock};

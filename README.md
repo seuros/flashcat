@@ -1,15 +1,33 @@
 # flashcat
 
-Linux/FreeBSD/OpenBSD/NetBSD/macOS host tool for the **FlashcatUSB Pro** (PCB 5.x).
+Linux/FreeBSD/OpenBSD/NetBSD/macOS host tool for **FlashcatUSB** programmers.
 Replaces the original VB.NET Windows software.
+
+## Supported programmers
+
+| Model | USB ID | VCC | Hardware |
+|-------|--------|-----|----------|
+| **Pro** (PCB 5.x) | `16c0:05e0` | 3.3V / 1.8V | ARM + iCE40 FPGA |
+| **Classic** (PCB 2.x) | `16c0:05de` | 3.3V / 5V | ATmega32U2/U4, no FPGA |
+| **Mach1** | `16c0:05e1` | 3.3V / 1.8V | ARM + iCE40 FPGA |
+| **xPort** | `16c0:05de` | 3.3V / 5V | full-speed AVR |
 
 ## Requirements
 
-- FlashcatUSB Pro connected via USB (`16c0:05e0`)
-- Linux: udev rule to allow non-root access
+- A FlashcatUSB programmer connected via USB
+- Linux: udev rule to allow non-root access (covers all models)
 
 ```
-SUBSYSTEM=="usb", ATTR{idVendor}=="16c0", ATTR{idProduct}=="05e0", MODE="0666"
+# /etc/udev/rules.d/70-flashcat.rules
+SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="05de", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="05e0", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="05e1", MODE="0666", TAG+="uaccess"
+```
+
+Reload after writing the file:
+
+```bash
+sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
 ## Install
@@ -23,6 +41,9 @@ cargo install --path .
 ```bash
 # Check connection and firmware version
 flashcat check
+
+# List all attached programmers (model, USB path, serial, firmware)
+flashcat devices
 
 # Identify attached chip (auto-detects voltage)
 flashcat detect
@@ -99,6 +120,20 @@ flashcat watch
 |------|---------|-------------|
 | `--mhz` | `8` | SPI clock: 1, 2, 4, 8, 12, 16, 24, 32 (quad reads: 8, 16, 32 only) |
 | `--voltage` | `auto` | Target voltage: `auto`, `1v8`, `3v3`, or `5v` |
+| `-p`, `--programmer` | auto | Select a programmer when more than one is attached |
+
+## Selecting a programmer
+
+With one programmer attached, flashcat just uses it. With several attached, run
+`flashcat devices` to see them and pass `-p` to pick one:
+
+```bash
+flashcat -p mach1 read -f dump.bin       # by model
+flashcat -p path=3-7 read -f dump.bin    # by USB path (from `flashcat devices`)
+flashcat -p serial=<serial> read -f ...  # by serial
+```
+
+Models: `classic`, `xport`, `mach1`, `pro`.
 
 ### Read options
 
@@ -225,5 +260,5 @@ supported.
 
 ## Supported chips
 
-SPI NOR flash on Pro PCB5. Built-in database covers EON, Winbond, GigaDevice, Macronix,
+SPI NOR flash. Built-in database covers EON, Winbond, GigaDevice, Macronix,
 Micron, Spansion, ISSI, and SST parts. Unknown chips fall back to SFDP auto-detection.

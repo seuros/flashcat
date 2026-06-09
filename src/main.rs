@@ -68,6 +68,13 @@ struct Cli {
           value_name = "V", help = "Target voltage: auto|1v8|3v3|5v — optional, default auto")]
     voltage: String,
 
+    /// Programmer to use when several are attached (flashrom-style).
+    /// Value: model (classic|xport|mach1|pro), serial=<s>, path=<busnum-port.chain>,
+    /// or a bare serial/path. With one programmer attached this is unnecessary.
+    #[arg(short = 'p', long = "programmer", global = true, value_name = "SEL",
+          help = "Select programmer when >1 attached: classic|xport|mach1|pro, serial=…, path=…")]
+    programmer: Option<String>,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -76,6 +83,9 @@ struct Cli {
 enum Cmd {
     /// Check device connection and firmware version
     Check,
+
+    /// List all attached FlashcatUSB programmers (model, USB path, serial, fw)
+    Devices,
 
     /// Watch for FlashcatUSB plug-in events and auto-detect chip
     Watch,
@@ -259,6 +269,8 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    usb::set_selector(cli.programmer.as_deref().map(usb::DeviceSelector::parse));
+
     let vc = match cli.voltage.as_str() {
         "auto"        => VoltageChoice::Auto,
         "1v8" | "1.8" => VoltageChoice::Explicit(Voltage::V1_8),
@@ -271,6 +283,7 @@ async fn main() -> Result<()> {
 
     match &cli.cmd {
         Cmd::Check => cmd::cmd_check().await,
+        Cmd::Devices => cmd::cmd_devices().await,
         Cmd::Watch => cmd::cmd_watch(vc, speed).await,
         Cmd::Detect => cmd::cmd_detect(vc, speed).await,
         Cmd::Read { file, offset, length, quad, legacy_read, layout, region, read_repeated } => {
