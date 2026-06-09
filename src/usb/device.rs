@@ -124,6 +124,23 @@ impl UsbDevice {
         Ok(ver)
     }
 
+    /// Stored FPGA logic version (Mach1 MachXO2), request 0xC4 — 4 bytes,
+    /// big-endian. Used to tell whether the CPLD already holds a given
+    /// bitstream (it is non-volatile).
+    pub async fn logic_version(&self) -> Result<u32> {
+        let b = self.ctrl_in(UsbReq::LogicVersionGet, 0, 4).await?;
+        if b.len() < 4 {
+            bail!("short logic version response");
+        }
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    /// Persist the FPGA logic version (request 0xC5) so a future session can
+    /// skip reprogramming a CPLD that already holds this bitstream.
+    pub async fn logic_set_version(&self, ver: u32) -> Result<()> {
+        self.ctrl_out(UsbReq::LogicVersionSet, ver, None).await
+    }
+
     /// Raw VERSION response: `(board_type_byte, "X.YZ")`.
     /// b[0]=board type, b[1..3]=ASCII version e.g. '1','1','9' → "1.19".
     pub async fn version_raw(&self) -> Result<(u8, String)> {

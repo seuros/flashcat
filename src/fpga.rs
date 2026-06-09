@@ -9,6 +9,26 @@ const BITSTREAM_PRO5_1V8: &[u8] = include_bytes!("../firmware/PRO5_1V8.bit");
 const BITSTREAM_MACH1_3V: &[u8] = include_bytes!("../firmware/MACH1_3V3.bit");
 const BITSTREAM_MACH1_1V8: &[u8] = include_bytes!("../firmware/MACH1_1V8.bit");
 
+const BITSTREAM_MACH1_SPI_3V: &[u8] = include_bytes!("../firmware/MACH1_SPI_3V.bit");
+const BITSTREAM_MACH1_SPI_1V8: &[u8] = include_bytes!("../firmware/MACH1_SPI_1V8.bit");
+
+// Mach1 MachXO2 stored-logic versions for SPI passthrough (source: Configuration.vb).
+// The CPLD is non-volatile; if it already holds one of these we skip programming.
+const MACH1_SPI_3V3: u32 = 0xAF33_0101;
+const MACH1_SPI_1V8: u32 = 0xAF18_0102;
+
+// MachXO2 SSPI configuration commands (source: ProgLogic.vb ISC_LOGIC_PROG).
+const IDCODE_PUB: [u8; 4] = [0xE0, 0, 0, 0];
+const ISC_ENABLE: [u8; 4] = [0xC6, 0x08, 0, 0];
+const ISC_ERASE: [u8; 4] = [0x0E, 0x04, 0, 0];
+const ISC_PROGRAMDONE: [u8; 4] = [0x5E, 0, 0, 0];
+const LSC_INITADDRESS: [u8; 4] = [0x46, 0, 0, 0];
+const LSC_PROGINCRNV: [u8; 4] = [0x70, 0, 0, 0x01];
+const LSC_READ_STATUS: [u8; 4] = [0x3C, 0, 0, 0];
+const LSC_REFRESH: [u8; 4] = [0x79, 0, 0, 0];
+const MACHXO2_PAGE_SIZE: usize = 16;
+const MACHXO2_IDCODE: u32 = 0x012B_C043;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Voltage {
     V1_8,
@@ -44,6 +64,12 @@ pub async fn vcc_off(dev: &UsbDevice) -> Result<()> {
 pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     if !dev.kind.has_fpga() {
         return Ok(());
+    }
+
+    // Mach1 uses a Lattice MachXO2 CPLD, not the Pro's iCE40 — different config
+    // protocol. The iCE40 PULSE_RESET/stream path below does not apply.
+    if dev.kind == Programmer::Mach1 {
+        return mach1_load(dev, voltage).await;
     }
 
     // Do NOT send LogicOff before load — it resets SSPI (fw 1.19).
@@ -109,6 +135,185 @@ async fn sspi_write(dev: &UsbDevice, data: &[u8]) -> Result<()> {
     dev.bulk_out(data.to_vec()).await?;
     tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     Ok(())
+}
+
+/// Mach1 (MachXO2) bring-up. The CPLD is non-volatile: if it already holds the
+/// SPI-passthrough bitstream we just power it, otherwise we program it.
+async fn mach1_load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
+    let (want, logic) = match voltage {
+        Voltage::V3_3 => (MACH1_SPI_3V3, BITSTREAM_MACH1_SPI_3V),
+        Voltage::V1_8 => (MACH1_SPI_1V8, BITSTREAM_MACH1_SPI_1V8),
+        Voltage::V5_0 => bail!("Mach1 does not support 5V"),
+    };
+
+    // Power the CPLD rail before touching the SSPI config port (source:
+    // MACH1_Init → SetDeviceVoltage runs first).
+    mach1_apply_voltage(dev, voltage).await?;
+
+    let have = dev.logic_version().await.context("reading Mach1 logic version")?;
+    if have != want {
+        info!("Mach1 CPLD holds {have:#010x}; programming SPI passthrough {want:#010x}");
+        mach1_program(dev, logic, want).await?;
+        // Re-power the rail after the post-program REFRESH reboots the CPLD.
+        mach1_apply_voltage(dev, voltage).await?;
+    } else {
+        info!("Mach1 SPI passthrough already loaded (logic {have:#010x})");
+    }
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    Ok(())
+}
+
+async fn mach1_apply_voltage(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
+    match voltage {
+        Voltage::V3_3 => dev.ctrl_out(UsbReq::Logic3v3, 0, None).await?,
+        Voltage::V1_8 => dev.ctrl_out(UsbReq::Logic1v8, 0, None).await?,
+        Voltage::V5_0 => bail!("Mach1 does not support 5V"),
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    Ok(())
+}
+
+// --- MachXO2 SSPI configuration (port of ProgLogic.vb ISC_LOGIC_PROG) ---
+
+/// SSPI transaction: SS low, write `cmd`, optionally read `read_len` bytes, SS high.
+async fn sspi_xfer(dev: &UsbDevice, cmd: &[u8], read_len: usize) -> Result<Vec<u8>> {
+    dev.ctrl_out(UsbReq::SpiSsEnable, 0, None).await?;
+    if !cmd.is_empty() {
+        sspi_write(dev, cmd).await?;
+    }
+    let out = if read_len > 0 {
+        dev.ctrl_out_nodelay(UsbReq::SpiRdData, read_len as u32, None).await?;
+        dev.bulk_in(read_len).await?
+    } else {
+        Vec::new()
+    };
+    dev.ctrl_out(UsbReq::SpiSsDisable, 0, None).await?;
+    Ok(out)
+}
+
+async fn sspi_status(dev: &UsbDevice) -> Result<u32> {
+    let s = sspi_xfer(dev, &LSC_READ_STATUS, 4).await?;
+    if s.len() < 4 {
+        bail!("short MachXO2 status response");
+    }
+    Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+}
+
+fn status_done(s: u32) -> bool { (s >> 8) & 1 == 1 }
+fn status_cfg_enabled(s: u32) -> bool { (s >> 9) & 1 == 1 }
+fn status_busy(s: u32) -> bool { (s >> 12) & 1 == 1 }
+fn status_fail(s: u32) -> bool { (s >> 13) & 1 == 1 }
+fn status_check_ok(s: u32) -> bool { (s >> 23) & 7 == 0 }
+
+/// Poll status until the BUSY flag clears (MACHXO2_MAX_BUSY_LOOP = 128 × 10ms).
+async fn sspi_wait(dev: &UsbDevice) -> Result<()> {
+    for _ in 0..128 {
+        let s = sspi_status(dev).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        if !status_busy(s) {
+            return Ok(());
+        }
+    }
+    bail!("MachXO2 busy-flag timeout");
+}
+
+async fn mach1_program(dev: &UsbDevice, logic: &[u8], code: u32) -> Result<()> {
+    // SSPI_Init(spi_mode=0, spi_select=1 (CS_1), speed=24)
+    let w32: u32 = (1 << 24) | (0 << 16) | 24;
+    dev.ctrl_out(UsbReq::SpiInit, w32, None).await?;
+
+    let id = u32::from_be_bytes({
+        let v = sspi_xfer(dev, &IDCODE_PUB, 4).await?;
+        [v[0], v[1], v[2], v[3]]
+    });
+    if id != MACHXO2_IDCODE {
+        // The vendor tool falls back to a JTAG/SVF erase here; we don't
+        // implement JTAG, so surface a clear error instead.
+        bail!(
+            "MachXO2 SSPI ident {id:#010x} != {MACHXO2_IDCODE:#010x} \
+             (config port not responding; JTAG recovery not implemented)"
+        );
+    }
+
+    if status_busy(sspi_status(dev).await?) {
+        bail!("MachXO2 busy before programming");
+    }
+
+    sspi_xfer(dev, &ISC_ENABLE, 0).await?;
+    let s = sspi_status(dev).await?;
+    if status_fail(s) || !status_cfg_enabled(s) {
+        bail!("MachXO2 ISC_ENABLE failed (status {s:#010x})");
+    }
+
+    let mut erased = false;
+    for _ in 0..3 {
+        sspi_xfer(dev, &ISC_ERASE, 0).await?;
+        sspi_wait(dev).await?;
+        let s = sspi_status(dev).await?;
+        if !status_fail(s) && status_check_ok(s) {
+            erased = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    if !erased {
+        bail!("MachXO2 erase failed");
+    }
+
+    sspi_xfer(dev, &LSC_INITADDRESS, 0).await?;
+
+    // Frame the bitstream: each 16-byte page is prefixed with LSC_PROGINCRNV.
+    // Replicates the vendor buffer byte-for-byte (last page may be partial).
+    let stride = MACHXO2_PAGE_SIZE + LSC_PROGINCRNV.len(); // 20
+    let mut framed = Vec::with_capacity(logic.len() + logic.len().div_ceil(MACHXO2_PAGE_SIZE) * 4);
+    for page in logic.chunks(MACHXO2_PAGE_SIZE) {
+        framed.extend_from_slice(&LSC_PROGINCRNV);
+        framed.extend_from_slice(page);
+    }
+
+    // Stream via SPI_REPEAT: firmware replays the buffer in `stride`-byte units.
+    // setup = (stride << 16) | chunk_len; up to 128 pages per bulk transfer.
+    let max_chunk = stride * 128;
+    let total = framed.len();
+    let mut offset = 0;
+    while offset < total {
+        let chunk_len = (total - offset).min(max_chunk);
+        let setup = ((stride as u32) << 16) | chunk_len as u32;
+        dev.ctrl_out_nodelay(UsbReq::SpiRepeat, setup, None).await?;
+        dev.bulk_out(framed[offset..offset + chunk_len].to_vec()).await?;
+        mach1_wait_task(dev).await?;
+        offset += chunk_len;
+    }
+
+    sspi_xfer(dev, &ISC_PROGRAMDONE, 0).await?;
+    sspi_wait(dev).await?;
+    let s = sspi_status(dev).await?;
+    if !status_done(s) {
+        bail!("MachXO2 programming did not complete (status {s:#010x})");
+    }
+
+    sspi_xfer(dev, &LSC_REFRESH, 0).await?;
+    let s = sspi_status(dev).await?;
+    if status_busy(s) || !status_check_ok(s) {
+        bail!("MachXO2 refresh failed (status {s:#010x})");
+    }
+
+    dev.logic_set_version(code).await?;
+    info!("Mach1 CPLD programmed with SPI passthrough ({} bytes)", logic.len());
+    Ok(())
+}
+
+/// Poll GET_TASK until the firmware reports idle (source: USB_WaitForComplete).
+async fn mach1_wait_task(dev: &UsbDevice) -> Result<()> {
+    for _ in 0..1000 {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let t = dev.ctrl_in(UsbReq::GetTask, 0, 1).await?;
+        if t.first().copied().unwrap_or(0xFF) == 0 {
+            return Ok(());
+        }
+    }
+    bail!("MachXO2 SPI_REPEAT task timeout");
 }
 
 pub async fn set_vcc(dev: &UsbDevice, voltage: Voltage) -> Result<()> {

@@ -41,6 +41,8 @@ pub enum UsbReq {
     FwUpdate = 0x94,
     FwReboot = 0x97,
 
+    SpiRepeat = 0xC6,
+
     PulseReset = 0xB6,
     LogicStatus = 0xC0,
     LogicOff = 0xC1,
