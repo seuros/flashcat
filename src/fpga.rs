@@ -12,10 +12,28 @@ const BITSTREAM_MACH1_1V8: &[u8] = include_bytes!("../firmware/MACH1_1V8.bit");
 const BITSTREAM_MACH1_SPI_3V: &[u8] = include_bytes!("../firmware/MACH1_SPI_3V.bit");
 const BITSTREAM_MACH1_SPI_1V8: &[u8] = include_bytes!("../firmware/MACH1_SPI_1V8.bit");
 
-// Mach1 MachXO2 stored-logic versions for SPI passthrough (source: Configuration.vb).
-// The CPLD is non-volatile; if it already holds one of these we skip programming.
+// Mach1 MachXO2 stored-logic versions (source: Configuration.vb). The CPLD is
+// non-volatile; if it already holds the target version we skip programming.
+// SPI passthrough handles single-lane SPI; the generic FPGA bitstream carries
+// the SQI engine needed for quad reads.
 const MACH1_SPI_3V3: u32 = 0xAF33_0101;
 const MACH1_SPI_1V8: u32 = 0xAF18_0102;
+const MACH1_FGPA_3V3: u32 = 0xAF33_0007;
+const MACH1_FGPA_1V8: u32 = 0xAF18_0007;
+
+/// Whether the current operation needs the Mach1's SQI (quad) logic, which
+/// lives in the generic FPGA bitstream rather than the SPI passthrough.
+static MACH1_QUAD: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Select the Mach1 bitstream family for this run. Call once in `main` before
+/// any `load()`; quad reads need the SQI-capable generic FPGA bitstream.
+pub fn set_mach1_quad(quad: bool) {
+    let _ = MACH1_QUAD.set(quad);
+}
+
+fn mach1_quad() -> bool {
+    *MACH1_QUAD.get().unwrap_or(&false)
+}
 
 // MachXO2 SSPI configuration commands (source: ProgLogic.vb ISC_LOGIC_PROG).
 const IDCODE_PUB: [u8; 4] = [0xE0, 0, 0, 0];
@@ -140,10 +158,14 @@ async fn sspi_write(dev: &UsbDevice, data: &[u8]) -> Result<()> {
 /// Mach1 (MachXO2) bring-up. The CPLD is non-volatile: if it already holds the
 /// SPI-passthrough bitstream we just power it, otherwise we program it.
 async fn mach1_load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
-    let (want, logic) = match voltage {
-        Voltage::V3_3 => (MACH1_SPI_3V3, BITSTREAM_MACH1_SPI_3V),
-        Voltage::V1_8 => (MACH1_SPI_1V8, BITSTREAM_MACH1_SPI_1V8),
-        Voltage::V5_0 => bail!("Mach1 does not support 5V"),
+    // Quad reads need the SQI engine in the generic FPGA bitstream; single-lane
+    // SPI uses the lighter passthrough (source: MACH1_Init mode→bitstream map).
+    let (want, logic) = match (voltage, mach1_quad()) {
+        (Voltage::V3_3, false) => (MACH1_SPI_3V3, BITSTREAM_MACH1_SPI_3V),
+        (Voltage::V1_8, false) => (MACH1_SPI_1V8, BITSTREAM_MACH1_SPI_1V8),
+        (Voltage::V3_3, true) => (MACH1_FGPA_3V3, BITSTREAM_MACH1_3V),
+        (Voltage::V1_8, true) => (MACH1_FGPA_1V8, BITSTREAM_MACH1_1V8),
+        (Voltage::V5_0, _) => bail!("Mach1 does not support 5V"),
     };
 
     // Power the CPLD rail before touching the SSPI config port (source:
@@ -152,8 +174,8 @@ async fn mach1_load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
 
     let have = dev.logic_version().await.context("reading Mach1 logic version")?;
     if have != want {
-        info!("Mach1 CPLD holds {have:#010x}; programming SPI passthrough {want:#010x}");
-        mach1_program(dev, logic, want).await?;
+        info!("Mach1 CPLD holds {have:#010x}; programming logic {want:#010x}");
+        mach1_program(dev, voltage, logic, want).await?;
         // Re-power the rail after the post-program REFRESH reboots the CPLD.
         mach1_apply_voltage(dev, voltage).await?;
     } else {
@@ -192,6 +214,22 @@ async fn sspi_xfer(dev: &UsbDevice, cmd: &[u8], read_len: usize) -> Result<Vec<u
     Ok(out)
 }
 
+/// Read the MachXO2 SSPI IDCODE, bounded by a timeout. In SPI-passthrough the
+/// SSPI port is bridged to the flash and never replies, so the bulk-in would
+/// hang forever; on timeout we abort the stuck endpoint and report an invalid
+/// ident (0) so the caller can fall back to JTAG recovery.
+async fn read_sspi_ident(dev: &UsbDevice) -> Result<u32> {
+    let read = sspi_xfer(dev, &IDCODE_PUB, 4);
+    match tokio::time::timeout(std::time::Duration::from_millis(1500), read).await {
+        Ok(Ok(v)) if v.len() >= 4 => Ok(u32::from_be_bytes([v[0], v[1], v[2], v[3]])),
+        Ok(_) => Ok(0),
+        Err(_) => {
+            dev.abort().await;
+            Ok(0)
+        }
+    }
+}
+
 async fn sspi_status(dev: &UsbDevice) -> Result<u32> {
     let s = sspi_xfer(dev, &LSC_READ_STATUS, 4).await?;
     if s.len() < 4 {
@@ -218,22 +256,28 @@ async fn sspi_wait(dev: &UsbDevice) -> Result<()> {
     bail!("MachXO2 busy-flag timeout");
 }
 
-async fn mach1_program(dev: &UsbDevice, logic: &[u8], code: u32) -> Result<()> {
+async fn mach1_program(dev: &UsbDevice, voltage: Voltage, logic: &[u8], code: u32) -> Result<()> {
     // SSPI_Init(spi_mode=0, spi_select=1 (CS_1), speed=24)
     let w32: u32 = (1 << 24) | (0 << 16) | 24;
     dev.ctrl_out(UsbReq::SpiInit, w32, None).await?;
 
-    let id = u32::from_be_bytes({
-        let v = sspi_xfer(dev, &IDCODE_PUB, 4).await?;
-        [v[0], v[1], v[2], v[3]]
-    });
+    let mut id = read_sspi_ident(dev).await?;
     if id != MACHXO2_IDCODE {
-        // The vendor tool falls back to a JTAG/SVF erase here; we don't
-        // implement JTAG, so surface a clear error instead.
-        bail!(
-            "MachXO2 SSPI ident {id:#010x} != {MACHXO2_IDCODE:#010x} \
-             (config port not responding; JTAG recovery not implemented)"
-        );
+        // SSPI port unreachable — the CPLD is running user logic (e.g. SPI
+        // passthrough bridges these pins to the flash). Recover via JTAG, which
+        // uses dedicated pins, then power-cycle and re-enter SSPI. Mirrors
+        // MACH1_EraseLogic (VCC off/on) + MACH1_ProgramLogic.
+        info!("MachXO2 SSPI ident {id:#010x}; recovering via JTAG erase");
+        crate::jtag::mach1_erase(dev).await?;
+        // Power-cycle the freshly-erased CPLD so it comes up with SSPI live.
+        dev.ctrl_out(UsbReq::LogicOff, 0, None).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        mach1_apply_voltage(dev, voltage).await?;
+        dev.ctrl_out(UsbReq::SpiInit, w32, None).await?;
+        id = read_sspi_ident(dev).await?;
+    }
+    if id != MACHXO2_IDCODE {
+        bail!("MachXO2 SSPI ident {id:#010x} != {MACHXO2_IDCODE:#010x} after JTAG erase");
     }
 
     if status_busy(sspi_status(dev).await?) {

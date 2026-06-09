@@ -43,6 +43,14 @@ pub enum UsbReq {
 
     SpiRepeat = 0xC6,
 
+    JtagDetect = 0x10,
+    JtagReset = 0x11,
+    JtagInit = 0x1A,
+    JtagToggle = 0x22,
+    JtagGotoState = 0x23,
+    JtagShiftIr = 0x32,
+    JtagShiftDr = 0x33,
+
     PulseReset = 0xB6,
     LogicStatus = 0xC0,
     LogicOff = 0xC1,

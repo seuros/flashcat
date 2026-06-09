@@ -9,6 +9,7 @@ mod chip;
 mod cmd;
 mod db;
 mod fpga;
+mod jtag;
 mod progress;
 mod programmer;
 mod spi;
@@ -270,6 +271,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     usb::set_selector(cli.programmer.as_deref().map(usb::DeviceSelector::parse));
+    fpga::set_mach1_quad(matches!(&cli.cmd, Cmd::Read { quad: true, .. }));
 
     let vc = match cli.voltage.as_str() {
         "auto"        => VoltageChoice::Auto,
