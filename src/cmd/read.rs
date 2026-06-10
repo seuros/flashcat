@@ -39,7 +39,7 @@ async fn run(
             crate::programmer::Programmer::Pro5 | crate::programmer::Programmer::Xport
         )
     {
-        bail!("--quad is supported on the Pro and xPort; use a single-lane read elsewhere");
+        bail!("--quad is supported on the Pro and xPort (the Classic and Mach1 firmware return zeros in quad mode); use a single-lane read there");
     }
 
     let (eff_offset, eff_len) = if let Some(ref rname) = opts.region {
@@ -80,6 +80,9 @@ async fn run(
         // bit (potentially non-volatile) when an unsupported speed was requested.
         spi::sqi_setup(dev, opts.speed.0).await?;
         spi::enable_quad(dev, chip.mfr).await?;
+        if chip.addr_bytes == 4 {
+            spi::enter_4byte_mode(dev).await?; // EN4B (0xB7) — vendor sends this for 4-byte parts
+        }
         spi::read_quad(dev, chip, eff_offset, len).await?
     } else if opts.passes > 1 {
         spi::majority_read(dev, chip, eff_offset, len, opts.legacy_read, opts.passes).await?

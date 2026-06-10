@@ -289,6 +289,18 @@ async fn poll_wip(dev: &UsbDevice, op: &str) -> Result<()> {
     bail!("timeout waiting for {op} to complete");
 }
 
+/// Enter 4-byte address mode (EN4B, 0xB7). Required by ≥256 Mbit parts before
+/// reads that clock a 4-byte address. Goes through the active bus.
+pub async fn enter_4byte_mode(dev: &UsbDevice) -> Result<()> {
+    ss_enable(dev).await?;
+    let wr = spibus_write(dev, &[0xB7]).await;
+    let dis = ss_disable(dev).await;
+    wr?;
+    dis?;
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    Ok(())
+}
+
 /// Read `length` bytes starting at `offset` using the SQI Quad Output Fast Read path.
 pub async fn read_quad(
     dev: &UsbDevice,

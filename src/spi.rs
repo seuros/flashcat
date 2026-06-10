@@ -22,7 +22,7 @@ pub use lock::{global_lock, global_unlock, lock_block, read_block_lock, unlock_b
 pub use otp::{otp_geometry, read_otp_locks, read_security_register};
 pub use probe::auto_probe;
 pub use protect::{protect_chip, read_wp_status, unprotect_chip};
-pub use quad::{enable_quad, read_quad, sqi_setup};
+pub use quad::{enable_quad, enter_4byte_mode, read_quad, sqi_setup};
 pub use read::{majority_read, read};
 pub use sfdp::read_sfdp;
 pub use write::{write, write_smart};
