@@ -4,8 +4,10 @@ use tracing::{info, warn};
 use crate::programmer::Programmer;
 use crate::usb::{UsbDevice, UsbReq};
 
-const BITSTREAM_PRO5_3V: &[u8] = include_bytes!("../firmware/PRO5_3V.bit");
-const BITSTREAM_PRO5_1V8: &[u8] = include_bytes!("../firmware/PRO5_1V8.bit");
+// One voltage-agnostic Pro PCB5 bitstream for both 1.8V and 3.3V — voltage is
+// selected by the Logic1v8/Logic3v3 command, not the bitstream (source: SRC675
+// FCUSBPRO_LoadBitstream loads a single "1.8V and 3V compatible" PRO5.bit).
+const BITSTREAM_PRO5: &[u8] = include_bytes!("../firmware/PRO5.bit");
 const BITSTREAM_MACH1_3V: &[u8] = include_bytes!("../firmware/MACH1_3V3.bit");
 const BITSTREAM_MACH1_1V8: &[u8] = include_bytes!("../firmware/MACH1_1V8.bit");
 
@@ -93,12 +95,11 @@ pub async fn load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     // Do NOT send LogicOff before load — it resets SSPI (fw 1.19).
     // VCC is controlled solely by Logic3v3/Logic1v8 sent below.
 
+    // Only the Pro reaches here; the Mach1 (MachXO2) returned via mach1_load above.
     let bitstream = match (dev.kind, voltage) {
-        (Programmer::Pro5,  Voltage::V3_3) => BITSTREAM_PRO5_3V,
-        (Programmer::Pro5,  Voltage::V1_8) => BITSTREAM_PRO5_1V8,
-        (Programmer::Mach1, Voltage::V3_3) => BITSTREAM_MACH1_3V,
-        (Programmer::Mach1, Voltage::V1_8) => BITSTREAM_MACH1_1V8,
-        (_, Voltage::V5_0) => bail!("FPGA programmers do not support 5V"),
+        (Programmer::Pro5, Voltage::V5_0) => bail!("Pro does not support 5V"),
+        (Programmer::Pro5, _) => BITSTREAM_PRO5,
+        (Programmer::Mach1, _) => unreachable!("Mach1 handled by mach1_load"),
         (Programmer::Classic, _) => unreachable!("Classic has no FPGA"),
         (Programmer::Xport, _) => unreachable!("xPort has no FPGA"),
     };
