@@ -163,7 +163,7 @@ async fn mach1_load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     // zeros for the assembled 4-lane data (fw 2.36) — so refuse before
     // reprogramming the CPLD. Quad works on the Pro instead.
     if mach1_quad() {
-        bail!("--quad is supported on the Pro only; use a single-lane read elsewhere");
+        bail!("--quad is supported on the Pro and xPort; use a single-lane read elsewhere");
     }
     // Single-lane SPI uses the lighter passthrough bitstream.
     let (want, logic) = match (voltage, mach1_quad()) {

@@ -12,7 +12,11 @@ const IO_SINGLE: u32 = 1;
 /// group (0x51-0x54) instead of the SPI group (0x41-0x45). The Mach1 loads its
 /// generic bitstream for this; the Pro uses its single bitstream for both.
 pub(crate) fn use_sqi(dev: &UsbDevice) -> bool {
-    crate::fpga::mach1_quad() && matches!(dev.kind, Programmer::Mach1 | Programmer::Pro5)
+    crate::fpga::mach1_quad()
+        && matches!(
+            dev.kind,
+            Programmer::Mach1 | Programmer::Pro5 | Programmer::Xport
+        )
 }
 
 const CMD_DEEP_POWER_DOWN: u8 = 0xB9;

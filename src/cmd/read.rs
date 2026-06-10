@@ -33,8 +33,13 @@ async fn run(
     if opts.quad && !chip.quad {
         bail!("{} does not support Quad SPI reads", chip.name);
     }
-    if opts.quad && dev.kind != crate::programmer::Programmer::Pro5 {
-        bail!("--quad is supported on the Pro only; use a single-lane read elsewhere");
+    if opts.quad
+        && !matches!(
+            dev.kind,
+            crate::programmer::Programmer::Pro5 | crate::programmer::Programmer::Xport
+        )
+    {
+        bail!("--quad is supported on the Pro and xPort; use a single-lane read elsewhere");
     }
 
     let (eff_offset, eff_len) = if let Some(ref rname) = opts.region {
