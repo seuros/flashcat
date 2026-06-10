@@ -159,8 +159,13 @@ async fn sspi_write(dev: &UsbDevice, data: &[u8]) -> Result<()> {
 /// Mach1 (MachXO2) bring-up. The CPLD is non-volatile: if it already holds the
 /// SPI-passthrough bitstream we just power it, otherwise we program it.
 async fn mach1_load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
-    // Quad reads need the SQI engine in the generic FPGA bitstream; single-lane
-    // SPI uses the lighter passthrough (source: MACH1_Init mode→bitstream map).
+    // The Mach1's generic bitstream can load for quad, but its FPGA returns
+    // zeros for the assembled 4-lane data (fw 2.36) — so refuse before
+    // reprogramming the CPLD. Quad works on the Pro instead.
+    if mach1_quad() {
+        bail!("--quad is supported on the Pro only; use a single-lane read elsewhere");
+    }
+    // Single-lane SPI uses the lighter passthrough bitstream.
     let (want, logic) = match (voltage, mach1_quad()) {
         (Voltage::V3_3, false) => (MACH1_SPI_3V3, BITSTREAM_MACH1_SPI_3V),
         (Voltage::V1_8, false) => (MACH1_SPI_1V8, BITSTREAM_MACH1_SPI_1V8),

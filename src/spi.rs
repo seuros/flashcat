@@ -53,6 +53,15 @@ impl SpiSpeed {
 }
 
 pub async fn init(dev: &UsbDevice, speed: SpiSpeed) -> Result<()> {
+    if bus::use_sqi(dev) {
+        // Mach1 generic bitstream: flash access goes through the SQI engine.
+        // Configure its clock divisor instead of the plain SPI engine.
+        quad::sqi_setup(dev, speed.0).await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        release_deep_power_down(dev).await?;
+        return Ok(());
+    }
+
     // Match the vendor host's normal SPI init path:
     // USB_SPI_INIT((mode << 16) | speed_mhz)
     //

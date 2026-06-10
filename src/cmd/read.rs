@@ -21,17 +21,6 @@ pub struct ReadOpts {
 }
 
 pub async fn cmd_read(opts: ReadOpts) -> Result<()> {
-    if opts.quad {
-        // The Mach1's generic FPGA bitstream does not reconstruct the 4 IO data
-        // lines: the flash drives quad output correctly (verified — one lane's
-        // bit-plane reads back as expected), but the firmware's quad receive
-        // sampler returns zeros for both SQI_RD_FLASH and raw SQI_RD_DATA(width=4)
-        // on fw 2.36. Not fixable host-side. Single-lane reads work.
-        bail!(
-            "Quad read is not functional on the Mach1 (FPGA/firmware does not \
-             assemble the 4 IO lines). Use a single-lane read."
-        );
-    }
     let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
     with_cleanup(&dev, run(&dev, &chip, &opts)).await
 }
@@ -44,8 +33,8 @@ async fn run(
     if opts.quad && !chip.quad {
         bail!("{} does not support Quad SPI reads", chip.name);
     }
-    if opts.quad && dev.kind != crate::programmer::Programmer::Mach1 {
-        bail!("--quad requires Mach1 hardware — Pro PCB5 does not route IO2/IO3 to the chip socket");
+    if opts.quad && dev.kind != crate::programmer::Programmer::Pro5 {
+        bail!("--quad is supported on the Pro only; use a single-lane read elsewhere");
     }
 
     let (eff_offset, eff_len) = if let Some(ref rname) = opts.region {

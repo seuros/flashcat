@@ -1,7 +1,19 @@
 use anyhow::Result;
 use std::time::Duration;
 
+use crate::programmer::Programmer;
 use crate::usb::{UsbDevice, UsbReq};
+
+// MULTI_IO_MODE.Single — 1 bit/clock. The SQI engine in single mode is a drop-in
+// for plain SPI, used for command/setup access (RDID, status, QE) in quad mode.
+const IO_SINGLE: u32 = 1;
+
+/// In quad mode the FPGA boards route flash access through the SQI command
+/// group (0x51-0x54) instead of the SPI group (0x41-0x45). The Mach1 loads its
+/// generic bitstream for this; the Pro uses its single bitstream for both.
+pub(crate) fn use_sqi(dev: &UsbDevice) -> bool {
+    crate::fpga::mach1_quad() && matches!(dev.kind, Programmer::Mach1 | Programmer::Pro5)
+}
 
 const CMD_DEEP_POWER_DOWN: u8 = 0xB9;
 const CMD_RELEASE_DEEP_POWER_DOWN: u8 = 0xAB;
@@ -13,24 +25,37 @@ const DEEP_POWER_DOWN_READY_POLLS: u8 = 20;
 // tRES1 (release-from-DPD to standby) is ~30 us typ for N25Q; 1 ms covers all parts.
 const RELEASE_DEEP_POWER_DOWN_DELAY: Duration = Duration::from_millis(1);
 
-// SPI_WR_DATA: ctrl_out arms transfer, bulk_out must follow without delay
+// {SPI,SQI}_WR_DATA: ctrl_out arms transfer, bulk_out must follow without delay.
+// SQI write encodes the IO mode in the high byte of the control value.
 pub(crate) async fn spibus_write(dev: &UsbDevice, data: &[u8]) -> Result<()> {
-    dev.ctrl_out_nodelay(UsbReq::SpiWrData, data.len() as u32, None).await?;
+    if use_sqi(dev) {
+        let v = (IO_SINGLE << 24) | (data.len() as u32 & 0x00FF_FFFF);
+        dev.ctrl_out_nodelay(UsbReq::SqiWrData, v, None).await?;
+    } else {
+        dev.ctrl_out_nodelay(UsbReq::SpiWrData, data.len() as u32, None).await?;
+    }
     dev.bulk_out(data.to_vec()).await
 }
 
-// SPI_RD_DATA: ctrl_out arms transfer, bulk_in must follow without delay
+// {SPI,SQI}_RD_DATA: ctrl_out arms transfer, bulk_in must follow without delay.
 pub(crate) async fn spibus_read(dev: &UsbDevice, len: usize) -> Result<Vec<u8>> {
-    dev.ctrl_out_nodelay(UsbReq::SpiRdData, len as u32, None).await?;
+    if use_sqi(dev) {
+        let v = (IO_SINGLE << 24) | (len as u32 & 0x00FF_FFFF);
+        dev.ctrl_out_nodelay(UsbReq::SqiRdData, v, None).await?;
+    } else {
+        dev.ctrl_out_nodelay(UsbReq::SpiRdData, len as u32, None).await?;
+    }
     dev.bulk_in(len).await
 }
 
 pub(crate) async fn ss_enable(dev: &UsbDevice) -> Result<()> {
-    dev.ctrl_out(UsbReq::SpiSsEnable, 0, None).await
+    let req = if use_sqi(dev) { UsbReq::SqiSsEnable } else { UsbReq::SpiSsEnable };
+    dev.ctrl_out(req, 0, None).await
 }
 
 pub(crate) async fn ss_disable(dev: &UsbDevice) -> Result<()> {
-    dev.ctrl_out(UsbReq::SpiSsDisable, 0, None).await
+    let req = if use_sqi(dev) { UsbReq::SqiSsDisable } else { UsbReq::SpiSsDisable };
+    dev.ctrl_out(req, 0, None).await
 }
 
 fn deep_power_down_packet() -> [u8; 1] {
