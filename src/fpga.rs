@@ -16,8 +16,8 @@ const BITSTREAM_MACH1_SPI_1V8: &[u8] = include_bytes!("../firmware/MACH1_SPI_1V8
 // non-volatile; if it already holds the target version we skip programming.
 // SPI passthrough handles single-lane SPI; the generic FPGA bitstream carries
 // the SQI engine needed for quad reads.
-const MACH1_SPI_3V3: u32 = 0xAF33_0101;
-const MACH1_SPI_1V8: u32 = 0xAF18_0102;
+const MACH1_SPI_3V3: u32 = 0xAF33_0102;
+const MACH1_SPI_1V8: u32 = 0xAF18_0103;
 const MACH1_FGPA_3V3: u32 = 0xAF33_0007;
 const MACH1_FGPA_1V8: u32 = 0xAF18_0007;
 
@@ -31,7 +31,7 @@ pub fn set_mach1_quad(quad: bool) {
     let _ = MACH1_QUAD.set(quad);
 }
 
-fn mach1_quad() -> bool {
+pub(crate) fn mach1_quad() -> bool {
     *MACH1_QUAD.get().unwrap_or(&false)
 }
 
