@@ -10,6 +10,7 @@ mod cmd;
 mod db;
 mod fpga;
 mod jtag;
+mod pnor;
 mod progress;
 mod programmer;
 mod spi;
@@ -240,6 +241,28 @@ enum Cmd {
         #[command(subcommand)]
         action: OtpCmd,
     },
+
+    /// Parallel NOR flash (x16) on the xPort or Mach1 (EXPIO protocol)
+    Pnor {
+        #[command(subcommand)]
+        action: PnorCmd,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum PnorCmd {
+    /// Identify the attached parallel NOR chip (manufacturer + device ID)
+    Detect,
+    /// Read parallel NOR to a file
+    Read {
+        #[arg(short, long, value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
+        offset: u32,
+        /// Bytes to read (required — CFI sizing not yet implemented)
+        #[arg(long, value_parser = parse_hex_or_dec)]
+        length: u32,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -345,6 +368,12 @@ async fn main() -> Result<()> {
                 cmd::cmd_otp_read(vc, speed, reg.map(|r| r as u8), file.clone()).await
             }
             OtpCmd::LockStatus => cmd::cmd_otp_lock_status(vc, speed).await,
+        },
+        Cmd::Pnor { action } => match action {
+            PnorCmd::Detect => cmd::cmd_pnor_detect(vc).await,
+            PnorCmd::Read { file, offset, length } => {
+                cmd::cmd_pnor_read(vc, file.clone(), *offset, *length).await
+            }
         },
     }
 }

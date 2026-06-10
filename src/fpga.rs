@@ -192,6 +192,29 @@ async fn mach1_load(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     Ok(())
 }
 
+/// Load the Mach1 generic FPGA bitstream (logic 0xAF33_0007/0xAF18_0007) used
+/// for non-SPI modes such as parallel NOR. Programs only if not already loaded.
+pub async fn mach1_load_generic(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
+    let (want, logic) = match voltage {
+        Voltage::V3_3 => (MACH1_FGPA_3V3, BITSTREAM_MACH1_3V),
+        Voltage::V1_8 => (MACH1_FGPA_1V8, BITSTREAM_MACH1_1V8),
+        Voltage::V5_0 => bail!("Mach1 does not support 5V"),
+    };
+    // Power-cycle the FPGA so the parallel bus comes up in a clean state — a
+    // stale config left by a prior session leaves writes ineffective.
+    dev.ctrl_out(UsbReq::LogicOff, 0, None).await?;
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    mach1_apply_voltage(dev, voltage).await?;
+    let have = dev.logic_version().await.context("reading Mach1 logic version")?;
+    if have != want {
+        info!("Mach1 CPLD holds {have:#010x}; programming generic logic {want:#010x}");
+        mach1_program(dev, voltage, logic, want).await?;
+        mach1_apply_voltage(dev, voltage).await?;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    Ok(())
+}
+
 async fn mach1_apply_voltage(dev: &UsbDevice, voltage: Voltage) -> Result<()> {
     match voltage {
         Voltage::V3_3 => dev.ctrl_out(UsbReq::Logic3v3, 0, None).await?,
