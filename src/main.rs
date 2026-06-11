@@ -259,9 +259,9 @@ enum PnorCmd {
         file: PathBuf,
         #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
         offset: u32,
-        /// Bytes to read (required — CFI sizing not yet implemented)
+        /// Bytes to read (default: full chip size if known)
         #[arg(long, value_parser = parse_hex_or_dec)]
-        length: u32,
+        length: Option<u32>,
     },
     /// Full-chip erase (AMD command set)
     Erase,

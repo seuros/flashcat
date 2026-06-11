@@ -27,20 +27,55 @@ async fn open(vc: VoltageChoice) -> Result<usb::UsbDevice> {
     Ok(dev)
 }
 
+fn print_chip(chip: &pnor::PnorChip) {
+    println!("Parallel NOR:");
+    println!(
+        "  Chip:    {}",
+        chip.name.as_deref().unwrap_or("unknown (not in DB)")
+    );
+    println!(
+        "  ID:      mfg {:#04x}  device {:#06x}",
+        chip.id.mfg, chip.id.id1
+    );
+    match chip.size {
+        Some(s) => println!("  Size:    {} ({} bytes)", human_size(s), s),
+        None => println!("  Size:    unknown — pass --length"),
+    }
+}
+
+fn human_size(bytes: u32) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{} MB", bytes / (1024 * 1024))
+    } else {
+        format!("{} KB", bytes / 1024)
+    }
+}
+
+/// Resolve the byte count to operate on: explicit `length`, else the chip size.
+fn resolve_len(chip: &pnor::PnorChip, length: Option<u32>) -> Result<u32> {
+    length
+        .or(chip.size)
+        .ok_or_else(|| anyhow::anyhow!("unknown chip size — pass --length"))
+}
+
 pub async fn cmd_pnor_detect(vc: VoltageChoice) -> Result<()> {
     let dev = open(vc).await?;
-    let id = pnor::setup(&dev).await?;
-    println!("Parallel NOR:");
-    println!("  Manufacturer: {:#04x}", id.mfg);
-    println!("  Device ID:    {:#06x} {:#04x}", id.id1, id.id2);
+    let chip = pnor::setup(&dev).await?;
+    print_chip(&chip);
     Ok(())
 }
 
-pub async fn cmd_pnor_read(vc: VoltageChoice, file: PathBuf, offset: u32, length: u32) -> Result<()> {
+pub async fn cmd_pnor_read(
+    vc: VoltageChoice,
+    file: PathBuf,
+    offset: u32,
+    length: Option<u32>,
+) -> Result<()> {
     let dev = open(vc).await?;
-    let id = pnor::setup(&dev).await?;
-    println!("Parallel NOR mfg={:#04x} id={:#06x} — reading {length} bytes", id.mfg, id.id1);
-    let data = pnor::read(&dev, offset, length).await?;
+    let chip = pnor::setup(&dev).await?;
+    let len = resolve_len(&chip, length)?;
+    println!("Reading {len} bytes from {}", chip.name.as_deref().unwrap_or("parallel NOR"));
+    let data = pnor::read(&dev, offset, len).await?;
     std::fs::write(&file, &data)?;
     println!("Saved {} bytes → {}", data.len(), file.display());
     Ok(())

@@ -1,0 +1,12 @@
+// Parallel NOR flash (x16), identified by manufacturer + 16-bit autoselect
+// device ID (read via the AMD autoselect sequence: 0xAA/0x55/0x90).
+// Top- and bottom-boot variants share a device size, so both are listed.
+[
+    // Cypress / Spansion S29AL — Am29LV800B-class 3V x16 (no CFI table)
+    (name: "Cypress S29AL004D (bottom)", mfr: 0x01, device_id: 0x22BA, size_bytes: 524288),
+    (name: "Cypress S29AL004D (top)",    mfr: 0x01, device_id: 0x22B9, size_bytes: 524288),
+    (name: "Cypress S29AL008J (bottom)", mfr: 0x01, device_id: 0x225B, size_bytes: 1048576),
+    (name: "Cypress S29AL008J (top)",    mfr: 0x01, device_id: 0x22DA, size_bytes: 1048576),
+    (name: "Cypress S29AL016 (bottom)",  mfr: 0x01, device_id: 0x2249, size_bytes: 2097152),
+    (name: "Cypress S29AL016 (top)",     mfr: 0x01, device_id: 0x22C4, size_bytes: 2097152),
+]

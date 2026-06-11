@@ -3,8 +3,10 @@ use serde::Deserialize;
 use std::sync::OnceLock;
 
 static DB: OnceLock<Vec<SpiNorDef>> = OnceLock::new();
+static PNOR_DB: OnceLock<Vec<PNorDef>> = OnceLock::new();
 
 const DB_RON: &str = include_str!("../db/spi_nor.ron");
+const PNOR_DB_RON: &str = include_str!("../db/parallel_nor.ron");
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub enum ChipVoltage {
@@ -47,4 +49,24 @@ pub fn lookup(mfr: u8, id1: u8, id2: u8) -> Result<Vec<&'static SpiNorDef>> {
 pub fn lookup_one(mfr: u8, id1: u8, id2: u8) -> Result<Option<&'static SpiNorDef>> {
     let db = load()?;
     Ok(db.iter().find(|d| d.mfr == mfr && d.id1 == id1 && d.id2 == id2))
+}
+
+/// Parallel NOR part: identified by manufacturer + 16-bit autoselect device ID.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PNorDef {
+    pub name: String,
+    pub mfr: u8,
+    pub device_id: u16,
+    pub size_bytes: u32,
+}
+
+/// Look up a parallel NOR part by manufacturer + autoselect device ID.
+pub fn lookup_pnor(mfr: u8, device_id: u16) -> Result<Option<&'static PNorDef>> {
+    if PNOR_DB.get().is_none() {
+        let parsed: Vec<PNorDef> =
+            ron::from_str(PNOR_DB_RON).context("failed to parse parallel_nor.ron")?;
+        let _ = PNOR_DB.set(parsed);
+    }
+    let db = PNOR_DB.get().unwrap();
+    Ok(db.iter().find(|d| d.mfr == mfr && d.device_id == device_id))
 }

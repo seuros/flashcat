@@ -109,44 +109,34 @@ async fn cfi_word(dev: &UsbDevice, word_off: u32) -> Result<u8> {
     Ok((read_mem(dev, word_off << 1).await? & 0xFF) as u8)
 }
 
-/// CFI query: enter the table, read the QRY signature + device size, exit.
-/// Returns `(qry_ok, size_bytes)`. Tries both entry commands the vendor uses:
-/// a bare `0x98` to 0x55, then the AMD unlock prefix + `0x98`.
-pub async fn read_cfi(dev: &UsbDevice) -> Result<(bool, Option<u32>)> {
-    let mut qry_ok = false;
-    for method in 0..2 {
-        if method == 0 {
-            write_cmd(dev, 0x55, 0x98).await?;
-        } else {
-            write_cmd(dev, 0x5555, 0xAA).await?;
-            write_cmd(dev, 0x2AAA, 0x55).await?;
-            write_cmd(dev, 0x5555, 0x98).await?;
-        }
-        tokio::time::sleep(Duration::from_millis(2)).await;
-        let (q, r, y) = (
-            cfi_word(dev, 0x10).await?,
-            cfi_word(dev, 0x11).await?,
-            cfi_word(dev, 0x12).await?,
-        );
-        info!("CFI method {method}: {q:#04x} {r:#04x} {y:#04x}");
-        if q == 0x51 && r == 0x52 && y == 0x59 {
-            qry_ok = true;
-            break;
-        }
-        reset_device(dev).await?;
-    }
-    if !qry_ok {
-        return Ok((false, None));
-    }
-    // CFI word 0x27 = device size as 2^N bytes.
-    let n = cfi_word(dev, 0x27).await? as u32;
-    let size = (8..=31).contains(&n).then(|| 1u32 << n);
+/// CFI query: enter the table and read the device size. Returns `None` when the
+/// chip has no CFI (older AMD parts like the Am29LV800B predate the standard).
+pub async fn read_cfi(dev: &UsbDevice) -> Result<Option<u32>> {
+    write_cmd(dev, 0x55, 0x98).await?; // enter CFI query (JEDEC: 0x98 → 0x55)
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let qry = cfi_word(dev, 0x10).await? == 0x51
+        && cfi_word(dev, 0x11).await? == 0x52
+        && cfi_word(dev, 0x12).await? == 0x59;
+    let size = if qry {
+        // CFI word 0x27 = device size as 2^N bytes.
+        let n = cfi_word(dev, 0x27).await? as u32;
+        (8..=31).contains(&n).then(|| 1u32 << n)
+    } else {
+        None
+    };
     reset_device(dev).await?;
-    Ok((true, size))
+    Ok(size)
+}
+
+/// Result of bringing up + identifying a parallel NOR chip.
+pub struct PnorChip {
+    pub id: PnorIdent,
+    pub name: Option<String>,
+    pub size: Option<u32>,
 }
 
 /// Bring up a board for parallel NOR access and identify the chip.
-pub async fn setup(dev: &UsbDevice) -> Result<PnorIdent> {
+pub async fn setup(dev: &UsbDevice) -> Result<PnorChip> {
     vpp_set(dev, VPP_5V).await?;
     tokio::time::sleep(Duration::from_millis(200)).await; // VCC settle (29F parts)
     init(dev, MODE_NOR_X16_WORD).await?;
@@ -157,9 +147,13 @@ pub async fn setup(dev: &UsbDevice) -> Result<PnorIdent> {
     }
     let id = read_ident(dev).await?;
     info!("parallel NOR ident: mfg={:#04x} id1={:#06x} id2={:#04x}", id.mfg, id.id1, id.id2);
-    let (qry, size) = read_cfi(dev).await?;
-    info!("parallel NOR CFI: QRY={qry} size={size:?}");
-    Ok(id)
+    let db = crate::db::lookup_pnor(id.mfg, id.id1)?;
+    // Prefer the DB; fall back to CFI for unlisted parts that have it.
+    let size = match db {
+        Some(d) => Some(d.size_bytes),
+        None => read_cfi(dev).await?,
+    };
+    Ok(PnorChip { id, name: db.map(|d| d.name.clone()), size })
 }
 
 fn setup_packet(addr: u32, count: u32, page: u16) -> [u8; 20] {
