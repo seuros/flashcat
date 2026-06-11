@@ -17,6 +17,14 @@ const VPP_5V: u32 = 1;
 
 const READ_BLOCK: u32 = 0x10000;
 
+/// EXPIO_TIMING — set parallel-bus read access and WE pulse widths (ns). The
+/// vendor's defaults (200ns / 125ns) give margin on slower parts and flaky
+/// adapter wiring; without it, reads can drop bits intermittently.
+async fn set_timing(dev: &UsbDevice, read_access: u16, we_pulse: u16) -> Result<()> {
+    let v = ((read_access as u32) << 8) | (we_pulse as u32 & 0xFF);
+    dev.ctrl_out(UsbReq::ExpioTiming, v, None).await
+}
+
 /// EXPIO_INIT — configure the parallel engine for `mode`; firmware replies 0x17.
 pub async fn init(dev: &UsbDevice, mode: u8) -> Result<()> {
     let r = dev.ctrl_in(UsbReq::ExpioInit, mode as u32, 1).await?;
@@ -142,6 +150,11 @@ pub async fn setup(dev: &UsbDevice) -> Result<PnorIdent> {
     vpp_set(dev, VPP_5V).await?;
     tokio::time::sleep(Duration::from_millis(200)).await; // VCC settle (29F parts)
     init(dev, MODE_NOR_X16_WORD).await?;
+    // EXPIO_TIMING is a Mach1-only feature (its FPGA has programmable bus
+    // timing); the xPort's AVR uses fixed timing and STALLs on this request.
+    if dev.kind == crate::programmer::Programmer::Mach1 {
+        set_timing(dev, 200, 125).await?;
+    }
     let id = read_ident(dev).await?;
     info!("parallel NOR ident: mfg={:#04x} id1={:#06x} id2={:#04x}", id.mfg, id.id1, id.id2);
     let (qry, size) = read_cfi(dev).await?;
@@ -179,4 +192,75 @@ pub async fn read(dev: &UsbDevice, offset: u32, len: u32) -> Result<Vec<u8>> {
     }
     pb.finish();
     Ok(out)
+}
+
+// E_PARALLEL_WRITEDATA.Bypass — firmware runs the AMD unlock-bypass program
+// sequence (0xA0; addr=data) per word.
+const WRITE_MODE_BYPASS: u32 = 3;
+
+async fn set_write_mode(dev: &UsbDevice, mode: u32) -> Result<()> {
+    dev.ctrl_out(UsbReq::ExpioModeWrite, mode, None).await
+}
+
+/// Poll GET_TASK until the firmware reports the parallel operation done.
+async fn wait_task(dev: &UsbDevice) -> Result<()> {
+    for _ in 0..2000 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let t = dev.ctrl_in(UsbReq::GetTask, 0, 1).await?;
+        if t.first().copied().unwrap_or(0xFF) == 0 {
+            return Ok(());
+        }
+    }
+    bail!("EXPIO task timed out");
+}
+
+/// True if the 4 bytes at `addr` are all 0xFF (erased).
+async fn blank_check(dev: &UsbDevice, addr: u32) -> Result<bool> {
+    let d = read(dev, addr, 4).await?;
+    Ok(d.iter().all(|&b| b == 0xFF))
+}
+
+/// Full-chip erase: AMD chip-erase command, then poll until blank (up to ~3 min).
+pub async fn chip_erase(dev: &UsbDevice) -> Result<()> {
+    info!("parallel NOR chip erase");
+    write_cmd(dev, 0x5555, 0xAA).await?;
+    write_cmd(dev, 0x2AAA, 0x55).await?;
+    write_cmd(dev, 0x5555, 0x80).await?;
+    write_cmd(dev, 0x5555, 0xAA).await?;
+    write_cmd(dev, 0x2AAA, 0x55).await?;
+    write_cmd(dev, 0x5555, 0x10).await?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    for _ in 0..360 {
+        if blank_check(dev, 0).await? {
+            reset_device(dev).await?;
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    bail!("chip erase timed out (not blank)");
+}
+
+async fn write_bulk(dev: &UsbDevice, addr: u32, data: &[u8]) -> Result<()> {
+    let setup = setup_packet(addr, data.len() as u32, 0);
+    dev.ctrl_out(UsbReq::ExpioWriteData, 0, Some(&setup)).await?;
+    dev.bulk_out(data.to_vec()).await?;
+    wait_task(dev).await
+}
+
+/// Program `data` at `offset` using the firmware's bypass-mode write engine.
+/// The flash must already be erased (NOR can only clear bits).
+pub async fn write(dev: &UsbDevice, offset: u32, data: &[u8]) -> Result<()> {
+    set_write_mode(dev, WRITE_MODE_BYPASS).await?;
+    let mut pb = Progress::new("Writing (parallel)", data.len() as u64);
+    let mut off = 0usize;
+    const CHUNK: usize = 8192;
+    while off < data.len() {
+        let n = CHUNK.min(data.len() - off);
+        write_bulk(dev, offset + off as u32, &data[off..off + n]).await?;
+        off += n;
+        pb.inc(n as u64);
+    }
+    pb.finish();
+    reset_device(dev).await?;
+    Ok(())
 }

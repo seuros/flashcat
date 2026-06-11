@@ -44,8 +44,11 @@ pub enum UsbReq {
     SpiRepeat = 0xC6,
 
     // Parallel I/O (EXPIO) — parallel NOR/NAND on xPort and Mach1.
+    ExpioTiming = 0x5E,
     ExpioInit = 0x64,
+    ExpioWriteData = 0x66,
     ExpioReadData = 0x67,
+    ExpioModeWrite = 0x74,
     ExpioCtrl = 0x76,
     ExpioWrMemData = 0x7B,
     ExpioRdMemData = 0x7C,

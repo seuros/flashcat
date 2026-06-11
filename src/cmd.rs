@@ -24,7 +24,7 @@ pub use erase::cmd_erase;
 pub use fmap::cmd_fmap;
 pub use lock::{cmd_block_lock, cmd_block_unlock};
 pub use otp::{cmd_otp_lock_status, cmd_otp_read};
-pub use pnor::{cmd_pnor_detect, cmd_pnor_read};
+pub use pnor::{cmd_pnor_detect, cmd_pnor_erase, cmd_pnor_read, cmd_pnor_write};
 pub use protect::{cmd_protect, cmd_unprotect};
 pub use read::{cmd_read, ReadOpts};
 pub use regions::cmd_regions;

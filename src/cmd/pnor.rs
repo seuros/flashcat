@@ -45,3 +45,39 @@ pub async fn cmd_pnor_read(vc: VoltageChoice, file: PathBuf, offset: u32, length
     println!("Saved {} bytes → {}", data.len(), file.display());
     Ok(())
 }
+
+pub async fn cmd_pnor_erase(vc: VoltageChoice) -> Result<()> {
+    let dev = open(vc).await?;
+    pnor::setup(&dev).await?;
+    pnor::chip_erase(&dev).await?;
+    println!("Chip erased.");
+    Ok(())
+}
+
+pub async fn cmd_pnor_write(
+    vc: VoltageChoice,
+    file: PathBuf,
+    offset: u32,
+    erase: bool,
+    verify: bool,
+) -> Result<()> {
+    let data = std::fs::read(&file)?;
+    let dev = open(vc).await?;
+    pnor::setup(&dev).await?;
+    if erase {
+        pnor::chip_erase(&dev).await?;
+        println!("Chip erased.");
+    }
+    pnor::write(&dev, offset, &data).await?;
+    println!("Wrote {} bytes → offset {:#x}", data.len(), offset);
+    if verify {
+        let back = pnor::read(&dev, offset, data.len() as u32).await?;
+        if back == data {
+            println!("Verify:  OK");
+        } else {
+            let diff = back.iter().zip(&data).filter(|(a, b)| a != b).count();
+            bail!("verify FAILED: {diff} mismatched bytes");
+        }
+    }
+    Ok(())
+}

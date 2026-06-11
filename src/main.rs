@@ -263,6 +263,21 @@ enum PnorCmd {
         #[arg(long, value_parser = parse_hex_or_dec)]
         length: u32,
     },
+    /// Full-chip erase (AMD command set)
+    Erase,
+    /// Write a file to parallel NOR (chip must be erased first; --erase to do both)
+    Write {
+        #[arg(short, long, value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
+        offset: u32,
+        /// Chip-erase before writing
+        #[arg(long)]
+        erase: bool,
+        /// Read back and verify after writing
+        #[arg(long)]
+        verify: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -373,6 +388,10 @@ async fn main() -> Result<()> {
             PnorCmd::Detect => cmd::cmd_pnor_detect(vc).await,
             PnorCmd::Read { file, offset, length } => {
                 cmd::cmd_pnor_read(vc, file.clone(), *offset, *length).await
+            }
+            PnorCmd::Erase => cmd::cmd_pnor_erase(vc).await,
+            PnorCmd::Write { file, offset, erase, verify } => {
+                cmd::cmd_pnor_write(vc, file.clone(), *offset, *erase, *verify).await
             }
         },
     }
