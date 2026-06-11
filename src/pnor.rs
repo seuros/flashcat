@@ -170,6 +170,34 @@ fn setup_packet(addr: u32, count: u32, page: u16) -> [u8; 20] {
     b
 }
 
+/// One EXPIO_READDATA transfer of `n` bytes at `addr`.
+async fn read_block_raw(dev: &UsbDevice, addr: u32, n: u32) -> Result<Vec<u8>> {
+    let setup = setup_packet(addr, n, 512);
+    dev.ctrl_out(UsbReq::ExpioReadData, 0, Some(&setup)).await?;
+    let block = dev.bulk_in(n as usize).await?;
+    if block.len() != n as usize {
+        bail!("short parallel read at {addr:#x}: {} of {}", block.len(), n);
+    }
+    Ok(block)
+}
+
+/// Read a block until two consecutive reads agree — the parallel bus (xPort AVR
+/// / marginal adapter wiring) occasionally drops a bit, so a single read isn't
+/// trustworthy. Accepts the value after one matching re-read; warns if it never
+/// stabilises and returns the last read.
+async fn read_block_stable(dev: &UsbDevice, addr: u32, n: u32) -> Result<Vec<u8>> {
+    let mut prev = read_block_raw(dev, addr, n).await?;
+    for _ in 0..4 {
+        let next = read_block_raw(dev, addr, n).await?;
+        if next == prev {
+            return Ok(next);
+        }
+        prev = next;
+    }
+    tracing::warn!("parallel read at {addr:#x} did not stabilise after retries");
+    Ok(prev)
+}
+
 /// Read `len` bytes from `offset` via EXPIO_READDATA, one block at a time.
 pub async fn read(dev: &UsbDevice, offset: u32, len: u32) -> Result<Vec<u8>> {
     let mut pb = Progress::new("Reading (parallel)", len as u64);
@@ -180,13 +208,7 @@ pub async fn read(dev: &UsbDevice, offset: u32, len: u32) -> Result<Vec<u8>> {
         .ok_or_else(|| anyhow::anyhow!("read range overflows u32"))?;
     while addr < end {
         let n = READ_BLOCK.min(end - addr);
-        let setup = setup_packet(addr, n, 512);
-        dev.ctrl_out(UsbReq::ExpioReadData, 0, Some(&setup)).await?;
-        let block = dev.bulk_in(n as usize).await?;
-        if block.len() != n as usize {
-            bail!("short parallel read at {addr:#x}: {} of {}", block.len(), n);
-        }
-        out.extend_from_slice(&block);
+        out.extend_from_slice(&read_block_stable(dev, addr, n).await?);
         addr += n;
         pb.inc(n as u64);
     }
