@@ -16,21 +16,11 @@ pub async fn cmd_erase(
 ) -> Result<()> {
     let (dev, chip, _voltage) = prepare(vc, speed).await?;
     with_cleanup(&dev, async {
-        let (eff_offset, eff_length) = if let Some(ref rname) = region {
-            let source = match &layout {
-                Some(p) => layout::RegionSource::LayoutFile(p.clone()),
-                None => layout::RegionSource::FmapScan,
+        let (eff_offset, eff_length) =
+            match layout::resolve_region_flags(region.as_deref(), layout.as_deref(), &chip, &dev, speed).await? {
+                Some((off, len)) => (Some(off), Some(len)),
+                None => (offset, length),
             };
-            let r = layout::resolve_region(source, rname, &chip, &dev, speed).await?;
-            (Some(r.offset), Some(r.length))
-        } else if let Some(ref lpath) = layout {
-            let regions = layout::parse_layout_file(lpath)?;
-            eprintln!("Available regions:");
-            for r in &regions { eprintln!("  {}", r.name); }
-            bail!("--layout requires --region");
-        } else {
-            (offset, length)
-        };
 
         match (eff_offset, eff_length) {
             (None, None) => {

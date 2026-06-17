@@ -244,6 +244,38 @@ pub enum RegionSource {
     FmapScan,
 }
 
+/// Resolve the `--region`/`--layout` flags shared by read/write/erase/compare.
+///
+/// - `--region` set: resolve from the layout file (if `--layout` given) or an
+///   FMAP scan, returning `Some((offset, length))`.
+/// - `--layout` set without `--region`: print the available regions and bail.
+/// - neither set: return `None` so the caller applies its own offset/length defaults.
+pub async fn resolve_region_flags(
+    region: Option<&str>,
+    layout: Option<&Path>,
+    chip: &crate::ResolvedChip,
+    dev: &crate::usb::UsbDevice,
+    speed: crate::spi::SpiSpeed,
+) -> Result<Option<(u32, u32)>> {
+    if let Some(name) = region {
+        let source = match layout {
+            Some(p) => RegionSource::LayoutFile(p.to_path_buf()),
+            None => RegionSource::FmapScan,
+        };
+        let r = resolve_region(source, name, chip, dev, speed).await?;
+        Ok(Some((r.offset, r.length)))
+    } else if let Some(lpath) = layout {
+        let regions = parse_layout_file(lpath)?;
+        eprintln!("Available regions:");
+        for r in &regions {
+            eprintln!("  {}", r.name);
+        }
+        bail!("--layout requires --region");
+    } else {
+        Ok(None)
+    }
+}
+
 pub async fn resolve_region(
     source: RegionSource,
     name: &str,

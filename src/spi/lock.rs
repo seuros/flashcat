@@ -22,6 +22,15 @@ fn require_block_lock_support(chip: &ResolvedChip) -> Result<()> {
     }
 }
 
+/// Validate that per-block locking is supported and `addr` is within the chip.
+fn check_block_addr(chip: &ResolvedChip, addr: u32) -> Result<()> {
+    require_block_lock_support(chip)?;
+    if addr >= chip.size_bytes {
+        bail!("address {addr:#010x} is out of range for {} (size {:#010x})", chip.name, chip.size_bytes);
+    }
+    Ok(())
+}
+
 /// Build the address byte sequence for a given chip (3 or 4 bytes, big-endian).
 fn addr_vec(chip: &ResolvedChip, addr: u32) -> Vec<u8> {
     if chip.addr_bytes == 4 {
@@ -43,10 +52,7 @@ fn addr_vec(chip: &ResolvedChip, addr: u32) -> Vec<u8> {
 /// Read the lock status of the block containing `addr`.
 /// Returns true if the block is locked (bit 0 of the response byte is set).
 pub async fn read_block_lock(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<bool> {
-    require_block_lock_support(chip)?;
-    if addr >= chip.size_bytes {
-        bail!("address {addr:#010x} is out of range for {} (size {:#010x})", chip.name, chip.size_bytes);
-    }
+    check_block_addr(chip, addr)?;
     let mut cmd = vec![0x3D]; // READ_BLOCK_LOCK
     cmd.extend_from_slice(&addr_vec(chip, addr));
     ss_enable(dev).await?;
@@ -66,10 +72,7 @@ pub async fn read_block_lock(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) ->
 /// Lock the block containing `addr` (volatile, requires WREN).
 /// IND_BLOCK_LOCK (0x36) completes in < 1 µs — no WIP polling needed.
 pub async fn lock_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<()> {
-    require_block_lock_support(chip)?;
-    if addr >= chip.size_bytes {
-        bail!("address {addr:#010x} is out of range for {} (size {:#010x})", chip.name, chip.size_bytes);
-    }
+    check_block_addr(chip, addr)?;
     write_enable(dev).await?;
     let mut cmd = vec![0x36]; // IND_BLOCK_LOCK
     cmd.extend_from_slice(&addr_vec(chip, addr));
@@ -84,10 +87,7 @@ pub async fn lock_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Resu
 /// Unlock the block containing `addr` (volatile, requires WREN).
 /// IND_BLOCK_UNLOCK (0x39) completes in < 1 µs — no WIP polling needed.
 pub async fn unlock_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32) -> Result<()> {
-    require_block_lock_support(chip)?;
-    if addr >= chip.size_bytes {
-        bail!("address {addr:#010x} is out of range for {} (size {:#010x})", chip.name, chip.size_bytes);
-    }
+    check_block_addr(chip, addr)?;
     write_enable(dev).await?;
     let mut cmd = vec![0x39]; // IND_BLOCK_UNLOCK
     cmd.extend_from_slice(&addr_vec(chip, addr));

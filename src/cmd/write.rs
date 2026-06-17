@@ -26,21 +26,11 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
         let data = std::fs::read(&opts.file)
             .with_context(|| format!("failed to read {}", opts.file.display()))?;
 
-        let (eff_offset, eff_len) = if let Some(ref rname) = opts.region {
-            let source = match &opts.layout {
-                Some(p) => layout::RegionSource::LayoutFile(p.clone()),
-                None => layout::RegionSource::FmapScan,
+        let (eff_offset, eff_len) =
+            match layout::resolve_region_flags(opts.region.as_deref(), opts.layout.as_deref(), &chip, &dev, opts.speed).await? {
+                Some((off, len)) => (off, Some(len)),
+                None => (opts.offset, None),
             };
-            let r = layout::resolve_region(source, rname, &chip, &dev, opts.speed).await?;
-            (r.offset, Some(r.length))
-        } else if let Some(ref lpath) = opts.layout {
-            let regions = layout::parse_layout_file(lpath)?;
-            eprintln!("Available regions:");
-            for r in &regions { eprintln!("  {}", r.name); }
-            bail!("--layout requires --region");
-        } else {
-            (opts.offset, None)
-        };
 
         if let Some(region_len) = eff_len
             && data.len() != region_len as usize { bail!(

@@ -248,15 +248,7 @@ fn print_w25q_4bit_bp(sr1: u8, sr2: u8, sr3: u8) {
         drv_strength(drv)
     );
 
-    if srp0 == 1 && srl == 1 {
-        println!(
-            "\n  \x1b[31m! SRP0=1 and SRL=1: status register permanently locked (OTP). \x1b[0m"
-        );
-    } else if srl == 1 {
-        println!("\n  \x1b[33m! SRL=1: status register locked until power cycle. \x1b[0m");
-    } else if srp0 == 1 {
-        println!("\n  \x1b[33m! SRP0=1: status register write depends on WP# pin level. \x1b[0m");
-    }
+    print_srp_srl_warning(srp0, srl);
     if cmp == 1 {
         println!(
             "  \x1b[33m! CMP=1: protected region is the COMPLEMENT of the BP-defined area. \x1b[0m"
@@ -589,15 +581,7 @@ fn print_w25q_3bit_bp(sr1: u8, sr2: u8, sr3: u8) {
         if hold_rst == 0 { "HOLD#" } else { "RESET#" }
     );
 
-    if srp0 == 1 && srl == 1 {
-        println!(
-            "\n  \x1b[31m! SRP0=1 and SRL=1: status register permanently locked (OTP). \x1b[0m"
-        );
-    } else if srl == 1 {
-        println!("\n  \x1b[33m! SRL=1: status register locked until power cycle. \x1b[0m");
-    } else if srp0 == 1 {
-        println!("\n  \x1b[33m! SRP0=1: status register write depends on WP# pin level. \x1b[0m");
-    }
+    print_srp_srl_warning(srp0, srl);
     if cmp == 1 {
         println!(
             "  \x1b[33m! CMP=1: protected region is the COMPLEMENT of the BP-defined area. \x1b[0m"
@@ -845,6 +829,19 @@ fn mx_dc(dc: u8) -> &'static str {
 
 fn bit(reg: u8, n: u8) -> u8 {
     (reg >> n) & 1
+}
+
+/// Print the SRP0/SRL status-register protection warning shared by the W25Q decoders.
+fn print_srp_srl_warning(srp0: u8, srl: u8) {
+    if srp0 == 1 && srl == 1 {
+        println!(
+            "\n  \x1b[31m! SRP0=1 and SRL=1: status register permanently locked (OTP). \x1b[0m"
+        );
+    } else if srl == 1 {
+        println!("\n  \x1b[33m! SRL=1: status register locked until power cycle. \x1b[0m");
+    } else if srp0 == 1 {
+        println!("\n  \x1b[33m! SRP0=1: status register write depends on WP# pin level. \x1b[0m");
+    }
 }
 
 fn bits(reg: u8) -> String {

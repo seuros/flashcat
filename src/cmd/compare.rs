@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
@@ -21,21 +21,11 @@ pub async fn cmd_compare(opts: CompareOpts) -> Result<()> {
         .with_context(|| format!("failed to read {}", opts.file.display()))?;
     let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
     with_cleanup(&dev, async {
-        let (eff_offset, eff_length) = if let Some(ref rname) = opts.region {
-            let source = match &opts.layout {
-                Some(p) => layout::RegionSource::LayoutFile(p.clone()),
-                None => layout::RegionSource::FmapScan,
+        let (eff_offset, eff_length) =
+            match layout::resolve_region_flags(opts.region.as_deref(), opts.layout.as_deref(), &chip, &dev, opts.speed).await? {
+                Some((off, len)) => (off, Some(len)),
+                None => (opts.offset, opts.length),
             };
-            let r = layout::resolve_region(source, rname, &chip, &dev, opts.speed).await?;
-            (r.offset, Some(r.length))
-        } else if let Some(ref lpath) = opts.layout {
-            let regions = layout::parse_layout_file(lpath)?;
-            eprintln!("Available regions:");
-            for r in &regions { eprintln!("  {}", r.name); }
-            bail!("--layout requires --region");
-        } else {
-            (opts.offset, opts.length)
-        };
 
         if eff_offset >= chip.size_bytes {
             anyhow::bail!("offset {eff_offset:#x} exceeds chip size {:#x}", chip.size_bytes);
