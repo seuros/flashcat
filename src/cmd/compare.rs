@@ -21,21 +21,11 @@ pub async fn cmd_compare(opts: CompareOpts) -> Result<()> {
         .with_context(|| format!("failed to read {}", opts.file.display()))?;
     let (dev, chip, _voltage) = prepare(opts.vc, opts.speed).await?;
     with_cleanup(&dev, async {
-        let (eff_offset, eff_length) =
-            match layout::resolve_region_flags(opts.region.as_deref(), opts.layout.as_deref(), &chip, &dev, opts.speed).await? {
-                Some((off, len)) => (off, Some(len)),
-                None => (opts.offset, opts.length),
-            };
-
-        if eff_offset >= chip.size_bytes {
-            anyhow::bail!("offset {eff_offset:#x} exceeds chip size {:#x}", chip.size_bytes);
-        }
-        let max_len = chip.size_bytes - eff_offset;
-        let len = match eff_length {
-            Some(l) if l > max_len => anyhow::bail!("length {l:#x} exceeds available space {max_len:#x}"),
-            Some(l) => l,
-            None => expected.len().min(max_len as usize) as u32,
-        };
+        let span = layout::resolve_span(
+            opts.region.as_deref(), opts.layout.as_deref(), &chip, &dev, opts.speed, opts.offset, opts.length,
+        ).await?;
+        let eff_offset = span.offset;
+        let len = span.length.unwrap_or(expected.len().min(span.max_len as usize) as u32);
 
         if expected.len() != len as usize {
             anyhow::bail!("file is {} bytes but compare length is {} bytes", expected.len(), len);

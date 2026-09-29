@@ -42,23 +42,10 @@ async fn run(
         bail!("--quad is supported on the Pro and xPort (the Classic and Mach1 firmware return zeros in quad mode); use a single-lane read there");
     }
 
-    let (eff_offset, eff_len) =
-        match layout::resolve_region_flags(opts.region.as_deref(), opts.layout.as_deref(), chip, dev, opts.speed).await? {
-            Some((off, len)) => (off, Some(len)),
-            None => (opts.offset, opts.length),
-        };
-
-    if eff_offset >= chip.size_bytes {
-        bail!("offset {eff_offset:#x} exceeds chip size {:#x}", chip.size_bytes);
-    }
-    let max_len = chip.size_bytes - eff_offset;
-    let len = match eff_len {
-        Some(l) if l > max_len => {
-            bail!("length {l:#x} exceeds available space {max_len:#x} at offset {eff_offset:#x}")
-        }
-        Some(l) => l,
-        None => max_len,
-    };
+    let span = layout::resolve_span(
+        opts.region.as_deref(), opts.layout.as_deref(), chip, dev, opts.speed, opts.offset, opts.length,
+    ).await?;
+    let (eff_offset, len) = (span.offset, span.len_or_rest());
 
     info!("reading {} bytes from {} (offset {eff_offset:#010x})", len, chip.name);
 

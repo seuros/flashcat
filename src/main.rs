@@ -45,37 +45,15 @@ impl std::str::FromStr for Mhz {
     }
 }
 
-/// A `u32` given as decimal or `0x`-prefixed hex.
-#[derive(Clone, Copy)]
-struct HexU32(u32);
-
-impl std::str::FromStr for HexU32 {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        let v = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-            u32::from_str_radix(h, 16)
-        } else {
-            s.parse::<u32>()
-        };
-        v.map(HexU32).map_err(|e| e.to_string())
-    }
-}
-
-/// Decimal or 0x-prefixed hex u64 argument.
+/// An integer given as decimal or `0x`-prefixed hex.
 #[derive(Clone, Copy, Debug)]
-struct HexU64(u64);
+struct Hex<T>(T);
 
-impl std::str::FromStr for HexU64 {
+impl<T: TryFrom<u64>> std::str::FromStr for Hex<T> {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, String> {
-        let v = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-            u64::from_str_radix(h, 16)
-        } else {
-            s.parse::<u64>()
-        };
-        v.map(HexU64).map_err(|e| e.to_string())
+        bios::layout::parse_hex_or_dec(s).map(Hex)
     }
 }
 
@@ -135,9 +113,9 @@ enum Cmd {
         #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
-        offset: HexU32,
+        offset: Hex<u32>,
         #[usage(long, )]
-        length: Option<HexU32>,
+        length: Option<Hex<u32>>,
         /// Use Quad SPI (4-bit) read path (chip must support quad mode)
         #[usage(long)]
         quad: bool,
@@ -167,7 +145,7 @@ enum Cmd {
         #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
-        offset: HexU32,
+        offset: Hex<u32>,
         /// Force erase before writing, then raw write (bypasses smart comparison; use for pre-erased blank chips)
         #[usage(long)]
         erase: bool,
@@ -189,10 +167,10 @@ enum Cmd {
     Erase {
         /// Start address (default: 0 = chip erase)
         #[usage(long, )]
-        offset: Option<HexU32>,
+        offset: Option<Hex<u32>>,
         /// Number of bytes to erase (rounded up to erase unit boundary)
         #[usage(long, )]
-        length: Option<HexU32>,
+        length: Option<Hex<u32>>,
         /// Layout file for region selection (flashrom format)
         #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         layout: Option<PathBuf>,
@@ -205,9 +183,9 @@ enum Cmd {
     #[usage(effect = "destructive")]
     Memtest {
         #[usage(long)]
-        offset: Option<HexU32>,
+        offset: Option<Hex<u32>>,
         #[usage(long)]
-        length: Option<HexU32>,
+        length: Option<Hex<u32>>,
         /// Layout file for region selection (flashrom format)
         #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         layout: Option<PathBuf>,
@@ -225,7 +203,7 @@ enum Cmd {
         thorough: bool,
         /// Seed for the random pass (default: time-based, printed)
         #[usage(long, requires = "--thorough")]
-        seed: Option<HexU64>,
+        seed: Option<Hex<u64>>,
         /// Write a JSON report
         #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         report: Option<PathBuf>,
@@ -240,9 +218,9 @@ enum Cmd {
         #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
-        offset: HexU32,
+        offset: Hex<u32>,
         #[usage(long, )]
-        length: Option<HexU32>,
+        length: Option<Hex<u32>>,
         /// Layout file for region selection (flashrom format)
         #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         layout: Option<PathBuf>,
@@ -255,7 +233,7 @@ enum Cmd {
     Fmap {
         /// Maximum bytes to scan for FMAP signature (hardware mode only)
         #[usage(long, default = "0x400000")]
-        scan_limit: HexU32,
+        scan_limit: Hex<u32>,
         /// Scan a local binary dump instead of reading hardware
         #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: Option<PathBuf>,
@@ -280,7 +258,7 @@ enum Cmd {
         global: bool,
         /// Lock the sector/block containing this address (0x36 — volatile, resets on power cycle); mutually exclusive with --global
         #[usage(long, )]
-        addr: Option<HexU32>,
+        addr: Option<Hex<u32>>,
     },
 
     /// Unlock flash blocks (Winbond individual block unlock, 0x39/0x98)
@@ -290,7 +268,7 @@ enum Cmd {
         global: bool,
         /// Unlock the sector/block containing this address (0x39 — volatile, resets on power cycle); mutually exclusive with --global
         #[usage(long, )]
-        addr: Option<HexU32>,
+        addr: Option<Hex<u32>>,
     },
 
     /// Parse a layout file and list regions (no hardware required)
@@ -391,10 +369,10 @@ enum PnorCmd {
         #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
-        offset: HexU32,
+        offset: Hex<u32>,
         /// Bytes to read (default: full chip size if known)
         #[usage(long, )]
-        length: Option<HexU32>,
+        length: Option<Hex<u32>>,
     },
     /// Full-chip erase (AMD command set)
     Erase,
@@ -403,7 +381,7 @@ enum PnorCmd {
         #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
-        offset: HexU32,
+        offset: Hex<u32>,
         /// Chip-erase before writing
         #[usage(long)]
         erase: bool,
@@ -419,7 +397,7 @@ enum OtpCmd {
     Read {
         /// Register number to read (1-based); omit to read all
         #[usage(long, )]
-        reg: Option<HexU32>,
+        reg: Option<Hex<u32>>,
         /// Write raw register bytes to this file instead of hexdumping
         #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: Option<PathBuf>,

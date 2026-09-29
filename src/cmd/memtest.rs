@@ -116,21 +116,10 @@ async fn run(dev: &UsbDevice, chip: &ResolvedChip, opts: &MemtestOpts) -> Result
 }
 
 async fn resolve_range(dev: &UsbDevice, chip: &ResolvedChip, opts: &MemtestOpts) -> Result<(u32, u32)> {
-    let (off, len) =
-        match layout::resolve_region_flags(opts.region.as_deref(), opts.layout.as_deref(), chip, dev, opts.speed).await? {
-            Some((off, len)) => (off, Some(len)),
-            None => (opts.offset.unwrap_or(0), opts.length),
-        };
-    if off >= chip.size_bytes {
-        bail!("offset {off:#x} exceeds chip size {:#x}", chip.size_bytes);
-    }
-    let max_len = chip.size_bytes - off;
-    let len = match len {
-        Some(0) => bail!("length must be > 0"),
-        Some(l) if l > max_len => bail!("length {l:#x} exceeds available space {max_len:#x} at offset {off:#x}"),
-        Some(l) => l,
-        None => max_len,
-    };
+    let span = layout::resolve_span(
+        opts.region.as_deref(), opts.layout.as_deref(), chip, dev, opts.speed, opts.offset.unwrap_or(0), opts.length,
+    ).await?;
+    let (off, len) = (span.offset, span.len_or_rest());
     let sector = chip.erase_size;
     if !off.is_multiple_of(sector) || !len.is_multiple_of(sector) {
         bail!("offset and length must be multiples of the {sector}-byte erase sector (memtest never erases outside the range)");

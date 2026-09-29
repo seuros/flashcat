@@ -26,22 +26,18 @@ pub async fn cmd_write(opts: WriteOpts) -> Result<()> {
         let data = std::fs::read(&opts.file)
             .with_context(|| format!("failed to read {}", opts.file.display()))?;
 
-        let (eff_offset, eff_len) =
-            match layout::resolve_region_flags(opts.region.as_deref(), opts.layout.as_deref(), &chip, &dev, opts.speed).await? {
-                Some((off, len)) => (off, Some(len)),
-                None => (opts.offset, None),
-            };
+        let span = layout::resolve_span(
+            opts.region.as_deref(), opts.layout.as_deref(), &chip, &dev, opts.speed, opts.offset, None,
+        ).await?;
+        let eff_offset = span.offset;
 
-        if let Some(region_len) = eff_len
+        if let Some(region_len) = span.length
             && data.len() != region_len as usize { bail!(
                 "file is {} bytes but region is {} bytes — sizes must match for region write",
                 data.len(), region_len
             ); }
 
-        if eff_offset >= chip.size_bytes {
-            bail!("offset {eff_offset:#x} exceeds chip size {:#x}", chip.size_bytes);
-        }
-        let available = (chip.size_bytes - eff_offset) as usize;
+        let available = span.max_len as usize;
         if data.len() > available {
             bail!(
                 "file ({} bytes) exceeds available space ({available} bytes at offset {eff_offset:#x})",

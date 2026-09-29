@@ -53,12 +53,14 @@ pub struct FmapArea {
 // Layout file parser  (flashrom format: 0xSTART:0xEND name)
 // ---------------------------------------------------------------------------
 
-pub fn parse_hex_or_dec_u32(s: &str) -> Result<u32> {
-    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u32::from_str_radix(h, 16).map_err(|e| anyhow::anyhow!("{e}"))
-    } else {
-        s.parse::<u32>().map_err(|e| anyhow::anyhow!("{e}"))
+/// Parse a decimal or `0x`-prefixed hex integer.
+pub fn parse_hex_or_dec<T: TryFrom<u64>>(s: &str) -> Result<T, String> {
+    let v = match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(h) => u64::from_str_radix(h, 16),
+        None => s.parse::<u64>(),
     }
+    .map_err(|e| e.to_string())?;
+    T::try_from(v).map_err(|_| format!("{s} is out of range"))
 }
 
 pub fn parse_layout_file(path: &Path) -> Result<Vec<Region>> {
@@ -100,9 +102,9 @@ pub fn parse_layout_file(path: &Path) -> Result<Vec<Region>> {
             .split_once(':')
             .ok_or_else(|| anyhow::anyhow!("line {lineno}: expected START:END, got '{range}'"))?;
 
-        let start = parse_hex_or_dec_u32(start_s)
+        let start = parse_hex_or_dec::<u32>(start_s)
             .map_err(|e| anyhow::anyhow!("line {lineno}: invalid start address '{start_s}': {e}"))?;
-        let end = parse_hex_or_dec_u32(end_s)
+        let end = parse_hex_or_dec::<u32>(end_s)
             .map_err(|e| anyhow::anyhow!("line {lineno}: invalid end address '{end_s}': {e}"))?;
 
         if end < start {
@@ -274,6 +276,50 @@ pub async fn resolve_region_flags(
     } else {
         Ok(None)
     }
+}
+
+/// Flash range selected by `--region`/`--layout` or `--offset`/`--length`,
+/// bounds-checked against the chip.
+pub struct Span {
+    pub offset: u32,
+    /// Explicit length (region size or `--length`); `None` when unspecified.
+    pub length: Option<u32>,
+    /// Bytes from `offset` to the end of the chip.
+    pub max_len: u32,
+}
+
+impl Span {
+    /// Explicit length, or the rest of the chip.
+    pub fn len_or_rest(&self) -> u32 {
+        self.length.unwrap_or(self.max_len)
+    }
+}
+
+pub async fn resolve_span(
+    region: Option<&str>,
+    layout: Option<&Path>,
+    chip: &crate::ResolvedChip,
+    dev: &crate::usb::UsbDevice,
+    speed: crate::spi::SpiSpeed,
+    offset: u32,
+    length: Option<u32>,
+) -> Result<Span> {
+    let (offset, length) = match resolve_region_flags(region, layout, chip, dev, speed).await? {
+        Some((off, len)) => (off, Some(len)),
+        None => (offset, length),
+    };
+    if offset >= chip.size_bytes {
+        bail!("offset {offset:#x} exceeds chip size {:#x}", chip.size_bytes);
+    }
+    let max_len = chip.size_bytes - offset;
+    match length {
+        Some(0) => bail!("length must be > 0"),
+        Some(l) if l > max_len => {
+            bail!("length {l:#x} exceeds available space {max_len:#x} at offset {offset:#x}")
+        }
+        _ => {}
+    }
+    Ok(Span { offset, length, max_len })
 }
 
 pub async fn resolve_region(
