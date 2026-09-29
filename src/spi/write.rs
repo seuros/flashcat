@@ -14,7 +14,8 @@ use super::read::read;
 // Send up to 64KB per ctrl_out/bulk_out cycle to minimize USB round trips.
 const WRITE_BLOCK: u32 = 65536;
 
-/// Compensates for the firmware's PAGE_PROGRAM +1 offset bug.
+/// Compensates for the ARM firmware's PAGE_PROGRAM +1 offset bug
+/// (see `Programmer::page_program_skews`).
 ///
 /// The firmware issues PAGE_PROGRAM starting at `addr+1` instead of `addr`, so the
 /// SPI flash page-wrap mechanism is used to land `buf[page_size-1]` at `addr+0`.
@@ -363,7 +364,7 @@ async fn write_sector_pages(
     Ok(())
 }
 
-async fn write_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32, data: &[u8]) -> Result<()> {
+pub(crate) async fn write_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32, data: &[u8]) -> Result<()> {
     if chip.page_size == 0 {
         bail!("chip page_size is 0 — invalid chip configuration");
     }
@@ -407,9 +408,13 @@ async fn write_block(dev: &UsbDevice, chip: &ResolvedChip, addr: u32, data: &[u8
     // count so the firmware programs the full padded buffer.  The 0xFF pad bytes
     // are idempotent on erased flash and write_smart always erases before writing.
     let setup = write_setup_packet(chip, addr, padded_len as u32);
-    let rotated = rotate_pages_left(&payload, page_size);
+    let out = if dev.kind.page_program_skews() {
+        rotate_pages_left(&payload, page_size)
+    } else {
+        payload.into_owned()
+    };
     dev.ctrl_out_nodelay(UsbReq::SpiWriteFlash, 0, Some(&setup)).await?;
-    dev.bulk_out(rotated).await?;
+    dev.bulk_out(out).await?;
     let pages = padded_len.div_ceil(page_size) as u32;
     wait_wip_after_block(dev, pages).await
 }

@@ -53,6 +53,12 @@ impl Programmer {
         matches!(self, Self::Pro5 | Self::Mach1)
     }
 
+    /// Whether the firmware's SPI PAGE_PROGRAM lands one byte past the
+    /// requested address (ARM/FPGA boards). The AVR boards program exactly.
+    pub fn page_program_skews(self) -> bool {
+        self.has_fpga()
+    }
+
     /// Whether USB control transfers use Recipient::Interface (has_fpga)
     /// vs Recipient::Device (Classic).
     pub fn uses_interface_recipient(self) -> bool {
