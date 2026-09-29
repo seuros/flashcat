@@ -9,6 +9,7 @@ mod cmd;
 mod db;
 mod fpga;
 mod jtag;
+mod memtest;
 mod pnor;
 mod progress;
 mod programmer;
@@ -58,6 +59,23 @@ impl std::str::FromStr for HexU32 {
             s.parse::<u32>()
         };
         v.map(HexU32).map_err(|e| e.to_string())
+    }
+}
+
+/// Decimal or 0x-prefixed hex u64 argument.
+#[derive(Clone, Copy, Debug)]
+struct HexU64(u64);
+
+impl std::str::FromStr for HexU64 {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let v = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            u64::from_str_radix(h, 16)
+        } else {
+            s.parse::<u64>()
+        };
+        v.map(HexU64).map_err(|e| e.to_string())
     }
 }
 
@@ -181,6 +199,36 @@ enum Cmd {
         /// Region name to erase (requires --layout or uses FMAP scan)
         #[usage(long, value_name = "NAME")]
         region: Option<String>,
+    },
+
+    /// Destructive self-test: erase/program/verify patterns to find bad sectors and fake-capacity chips
+    #[usage(effect = "destructive")]
+    Memtest {
+        #[usage(long)]
+        offset: Option<HexU32>,
+        #[usage(long)]
+        length: Option<HexU32>,
+        /// Layout file for region selection (flashrom format)
+        #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
+        layout: Option<PathBuf>,
+        /// Region name to test (requires --layout or uses FMAP scan)
+        #[usage(long, value_name = "NAME")]
+        region: Option<String>,
+        /// Save current contents here first; restore and verify them after the test
+        #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
+        backup: Option<PathBuf>,
+        /// Run on a non-blank range without a backup (contents are destroyed)
+        #[usage(long)]
+        force: bool,
+        /// Add a pseudo-random data pass
+        #[usage(long)]
+        thorough: bool,
+        /// Seed for the random pass (default: time-based, printed)
+        #[usage(long, requires = "--thorough")]
+        seed: Option<HexU64>,
+        /// Write a JSON report
+        #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
+        report: Option<PathBuf>,
     },
 
     /// Read and decode SFDP (Serial Flash Discoverable Parameters)
@@ -443,6 +491,20 @@ async fn main() -> Result<()> {
                 smart: *smart,
                 layout: layout.clone(),
                 region: region.clone(),
+            }).await
+        }
+        Cmd::Memtest { offset, length, layout, region, backup, force, thorough, seed, report } => {
+            cmd::cmd_memtest(cmd::MemtestOpts {
+                vc, speed,
+                offset: offset.map(|o| o.0),
+                length: length.map(|l| l.0),
+                layout: layout.clone(),
+                region: region.clone(),
+                backup: backup.clone(),
+                force: *force,
+                thorough: *thorough,
+                seed: seed.map(|s| s.0),
+                report: report.clone(),
             }).await
         }
         Cmd::Sfdp => cmd::cmd_sfdp(vc, speed).await,

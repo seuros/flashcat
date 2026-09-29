@@ -448,6 +448,7 @@ dependencies = [
  "ratatui",
  "ron",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
  "state-machines",
  "tempfile",
