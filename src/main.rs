@@ -65,6 +65,7 @@ impl std::str::FromStr for HexU32 {
 #[usage(
     bin = "flashcat",
     version,
+    completion,
     about = "FlashcatUSB Pro — Linux/FreeBSD/macOS (voltage auto-detected by default)",
     example("flashcat detect"),
     example("flashcat read --file dump.bin"),
@@ -113,7 +114,7 @@ enum Cmd {
     /// Read flash to file
     Read {
         /// Output file (binary dump of flash contents)
-        #[usage(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
         offset: HexU32,
@@ -126,7 +127,7 @@ enum Cmd {
         #[usage(long)]
         legacy_read: bool,
         /// Layout file for region selection (flashrom format)
-        #[usage(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         layout: Option<PathBuf>,
         /// Region name to read (requires --layout or uses FMAP scan)
         #[usage(long, value_name = "NAME")]
@@ -145,7 +146,7 @@ enum Cmd {
     /// Write file to flash (auto-detects voltage; --erase/--verify optional)
     Write {
         /// Input binary to flash
-        #[usage(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
         offset: HexU32,
@@ -159,7 +160,7 @@ enum Cmd {
         #[usage(long, hide)]
         smart: bool,
         /// Layout file for region selection (flashrom format)
-        #[usage(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         layout: Option<PathBuf>,
         /// Region name to write (requires --layout or uses FMAP scan)
         #[usage(long, value_name = "NAME")]
@@ -175,7 +176,7 @@ enum Cmd {
         #[usage(long, )]
         length: Option<HexU32>,
         /// Layout file for region selection (flashrom format)
-        #[usage(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         layout: Option<PathBuf>,
         /// Region name to erase (requires --layout or uses FMAP scan)
         #[usage(long, value_name = "NAME")]
@@ -188,14 +189,14 @@ enum Cmd {
     /// Compare flash contents against a file (SHA-256 + diff report)
     Compare {
         /// Reference binary to compare flash against
-        #[usage(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
         offset: HexU32,
         #[usage(long, )]
         length: Option<HexU32>,
         /// Layout file for region selection (flashrom format)
-        #[usage(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         layout: Option<PathBuf>,
         /// Region name to compare (requires --layout or uses FMAP scan)
         #[usage(long, value_name = "NAME")]
@@ -208,7 +209,7 @@ enum Cmd {
         #[usage(long, default = "0x400000")]
         scan_limit: HexU32,
         /// Scan a local binary dump instead of reading hardware
-        #[usage(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: Option<PathBuf>,
     },
 
@@ -246,7 +247,7 @@ enum Cmd {
 
     /// Parse a layout file and list regions (no hardware required)
     Regions {
-        #[usage(short, long)]
+        #[usage(short, long, value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
     },
 
@@ -261,6 +262,76 @@ enum Cmd {
         #[usage(subcommand)]
         action: PnorCmd,
     },
+
+    /// Print or install the shell completion script
+    Completions {
+        /// Shell to generate completions for
+        #[usage(value_enum)]
+        shell: Shell,
+        /// Install the script where the shell looks for it instead of printing it
+        #[usage(long, effect = "write")]
+        install: bool,
+        /// Replace an existing file at the install path that flashcat did not write
+        #[usage(long, requires = "--install", effect = "write")]
+        force: bool,
+    },
+}
+
+#[derive(Clone, Copy, usage::ValueEnum)]
+#[usage(rename_all = "snake_case")]
+enum Shell {
+    Bash,
+    Elvish,
+    Fish,
+    Nu,
+    Zsh,
+}
+
+impl From<Shell> for usage::complete::Shell {
+    fn from(shell: Shell) -> Self {
+        match shell {
+            Shell::Bash => Self::Bash,
+            Shell::Elvish => Self::Elvish,
+            Shell::Fish => Self::Fish,
+            Shell::Nu => Self::Nu,
+            Shell::Zsh => Self::Zsh,
+        }
+    }
+}
+
+/// Print the completion script, or install it without touching any shell rc file.
+fn cmd_completions(shell: Shell, install: bool, force: bool) -> Result<()> {
+    use usage::install::{Env, Loading, OnForeign, Wrote};
+
+    let shell = shell.into();
+    if !install {
+        println!("{}", Cli::completion_script(shell).trim_end());
+        return Ok(());
+    }
+    let on_foreign = if force { OnForeign::Overwrite } else { OnForeign::Refuse };
+    let done = Cli::install_completion(shell, &Env::from_process(), on_foreign).map_err(|e| {
+        match e {
+            usage::install::Error::Foreign { .. } => {
+                anyhow::anyhow!("{e}\n\nPass --force to replace it, or redirect the script yourself.")
+            }
+            e => anyhow::Error::new(e),
+        }
+    })?;
+    eprintln!("installed to {}", done.plan.path.display());
+    if done.wrote == Wrote::Unchanged {
+        eprintln!("already up to date");
+    }
+    if let Some(line) = done.plan.loading.instruction() {
+        let file = match &done.plan.loading {
+            Loading::Manual { file, .. } => file.as_str(),
+            _ => "your shell's startup file",
+        };
+        eprintln!("\nadd this to {file}, once:\n\n{line}\n");
+    }
+    if let Some(note) = done.plan.note {
+        eprintln!("note: {note}");
+    }
+    Ok(())
 }
 
 #[derive(usage::Subcommands)]
@@ -269,7 +340,7 @@ enum PnorCmd {
     Detect,
     /// Read parallel NOR to a file
     Read {
-        #[usage(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
         offset: HexU32,
@@ -281,7 +352,7 @@ enum PnorCmd {
     Erase,
     /// Write a file to parallel NOR (chip must be erased first; --erase to do both)
     Write {
-        #[usage(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: PathBuf,
         #[usage(long, default = "0")]
         offset: HexU32,
@@ -302,7 +373,7 @@ enum OtpCmd {
         #[usage(long, )]
         reg: Option<HexU32>,
         /// Write raw register bytes to this file instead of hexdumping
-        #[usage(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE", value_hint = usage::ValueHint::FilePath)]
         file: Option<PathBuf>,
     },
     /// Show OTP lock bits LB1-3 (whether each register is permanently locked)
@@ -321,6 +392,10 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    if let Cmd::Completions { shell, install, force } = cli.cmd {
+        return cmd_completions(shell, install, force);
+    }
 
     usb::set_selector(cli.programmer.as_deref().map(usb::DeviceSelector::parse));
     fpga::set_mach1_quad(matches!(&cli.cmd, Cmd::Read { quad: true, .. }));
@@ -408,6 +483,7 @@ async fn main() -> Result<()> {
                 cmd::cmd_pnor_write(vc, file.clone(), offset.0, *erase, *verify).await
             }
         },
+        Cmd::Completions { .. } => unreachable!("handled before device setup"),
     }
 }
 
@@ -496,3 +572,4 @@ pub(crate) async fn prepare(
         }
     }
 }
+
