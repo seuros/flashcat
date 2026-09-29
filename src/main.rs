@@ -1,7 +1,6 @@
 #![warn(clippy::all)]
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 mod bios;
@@ -28,60 +27,76 @@ pub(crate) enum VoltageChoice {
     Explicit(Voltage),
 }
 
-fn parse_mhz(s: &str) -> Result<u8, String> {
-    let mhz: u8 = s.parse().map_err(|_| format!("'{s}' is not a valid MHz value"))?;
-    if SpiSpeed::ALL.contains(&SpiSpeed(mhz)) {
-        Ok(mhz)
-    } else {
-        Err(format!("'{mhz}' is not supported — use one of: 1, 2, 4, 8, 12, 16, 24, 32"))
+/// SPI clock in MHz, restricted to the rates the programmer supports.
+#[derive(Clone, Copy)]
+struct Mhz(u8);
+
+impl std::str::FromStr for Mhz {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let mhz: u8 = s.parse().map_err(|_| format!("'{s}' is not a valid MHz value"))?;
+        if SpiSpeed::ALL.contains(&SpiSpeed(mhz)) {
+            Ok(Mhz(mhz))
+        } else {
+            Err(format!("'{mhz}' is not supported — use one of: 1, 2, 4, 8, 12, 16, 24, 32"))
+        }
     }
 }
 
-fn parse_hex_or_dec(s: &str) -> Result<u32, String> {
-    if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        u32::from_str_radix(h, 16).map_err(|e| e.to_string())
-    } else {
-        s.parse::<u32>().map_err(|e| e.to_string())
+/// A `u32` given as decimal or `0x`-prefixed hex.
+#[derive(Clone, Copy)]
+struct HexU32(u32);
+
+impl std::str::FromStr for HexU32 {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let v = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            u32::from_str_radix(h, 16)
+        } else {
+            s.parse::<u32>()
+        };
+        v.map(HexU32).map_err(|e| e.to_string())
     }
 }
 
-#[derive(Parser)]
-#[command(
-    name = "flashcat",
+#[derive(usage::Cli)]
+#[usage(
+    bin = "flashcat",
     version,
     about = "FlashcatUSB Pro — Linux/FreeBSD/macOS (voltage auto-detected by default)",
-    after_help = "QUICK START (sensible defaults — no global flags needed):\n  \
-                  flashcat detect\n  \
-                  flashcat read    --file dump.bin\n  \
-                  flashcat write   --file dump.bin --verify\n  \
-                  flashcat compare --file dump.bin\n\n\
-                  Override defaults only if you know you need to:\n  \
-                  --voltage  auto-probes 1v8/3v3 (default: auto)\n  \
-                  --mhz      SPI clock, default 8 MHz; raise to 16/24/32 if your wiring is clean"
+    example("flashcat detect"),
+    example("flashcat read --file dump.bin"),
+    example("flashcat write --file dump.bin --verify"),
+    example("flashcat compare --file dump.bin"),
+    after_help = "Sensible defaults — no global flags needed. Override only if you know you need to: \
+                  --voltage auto-probes 1v8/3v3 (default: auto); \
+                  --mhz is the SPI clock, default 8 MHz — raise to 16/24/32 if your wiring is clean."
 )]
 struct Cli {
     /// SPI clock in MHz — optional; default 8 MHz works for most chips
-    #[arg(long, default_value = "8", global = true, value_parser = parse_mhz,
+    #[usage(long, default = "8", global,
           value_name = "MHZ", help = "SPI clock (1,2,4,8,12,16,24,32) — optional, default 8")]
-    mhz: u8,
+    mhz: Mhz,
 
     /// Target voltage — optional; 'auto' probes the chip
-    #[arg(long, default_value = "auto", global = true,
+    #[usage(long, default = "auto", global,
           value_name = "V", help = "Target voltage: auto|1v8|3v3|5v — optional, default auto")]
     voltage: String,
 
     /// Programmer to use when several are attached (flashrom-style).
     /// Value: model (classic|xport|mach1|pro), serial=<s>, path=<busnum-port.chain>,
     /// or a bare serial/path. With one programmer attached this is unnecessary.
-    #[arg(short = 'p', long = "programmer", global = true, value_name = "SEL",
+    #[usage(short = 'p', long = "programmer", global, value_name = "SEL",
           help = "Select programmer when >1 attached: classic|xport|mach1|pro, serial=…, path=…")]
     programmer: Option<String>,
 
-    #[command(subcommand)]
+    #[usage(subcommand)]
     cmd: Cmd,
 }
 
-#[derive(Subcommand)]
+#[derive(usage::Subcommands)]
 enum Cmd {
     /// Check device connection and firmware version
     Check,
@@ -98,31 +113,30 @@ enum Cmd {
     /// Read flash to file
     Read {
         /// Output file (binary dump of flash contents)
-        #[arg(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE")]
         file: PathBuf,
-        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
-        offset: u32,
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        length: Option<u32>,
+        #[usage(long, default = "0")]
+        offset: HexU32,
+        #[usage(long, )]
+        length: Option<HexU32>,
         /// Use Quad SPI (4-bit) read path (chip must support quad mode)
-        #[arg(long)]
+        #[usage(long)]
         quad: bool,
         /// Use legacy Read (0x03) instead of Fast Read (0x0B)
-        #[arg(long)]
+        #[usage(long)]
         legacy_read: bool,
         /// Layout file for region selection (flashrom format)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         layout: Option<PathBuf>,
         /// Region name to read (requires --layout or uses FMAP scan)
-        #[arg(long, value_name = "NAME")]
+        #[usage(long, value_name = "NAME")]
         region: Option<String>,
         /// Read N times and use majority voting to recover from defective cells.
         /// --read-repeated (no value) defaults to 3. Range: 3–100.
-        #[arg(
+        #[usage(
             long,
             value_name = "N",
-            num_args = 0..=1,
-            default_missing_value = "3",
+            default_missing = "3",
             help = "Read N times (3–100, default 3) and majority-vote each bit (matches flashrom API)"
         )]
         read_repeated: Option<u32>,
@@ -131,40 +145,40 @@ enum Cmd {
     /// Write file to flash (auto-detects voltage; --erase/--verify optional)
     Write {
         /// Input binary to flash
-        #[arg(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE")]
         file: PathBuf,
-        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
-        offset: u32,
+        #[usage(long, default = "0")]
+        offset: HexU32,
         /// Force erase before writing, then raw write (bypasses smart comparison; use for pre-erased blank chips)
-        #[arg(long)]
+        #[usage(long)]
         erase: bool,
         /// Read back and verify after writing
-        #[arg(long)]
+        #[usage(long)]
         verify: bool,
         /// Deprecated: smart write is now always the default; this flag has no effect
-        #[arg(long, hide = true)]
+        #[usage(long, hide)]
         smart: bool,
         /// Layout file for region selection (flashrom format)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         layout: Option<PathBuf>,
         /// Region name to write (requires --layout or uses FMAP scan)
-        #[arg(long, value_name = "NAME")]
+        #[usage(long, value_name = "NAME")]
         region: Option<String>,
     },
 
     /// Erase flash (chip by default; --offset + --length for sector range)
     Erase {
         /// Start address (default: 0 = chip erase)
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        offset: Option<u32>,
+        #[usage(long, )]
+        offset: Option<HexU32>,
         /// Number of bytes to erase (rounded up to erase unit boundary)
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        length: Option<u32>,
+        #[usage(long, )]
+        length: Option<HexU32>,
         /// Layout file for region selection (flashrom format)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         layout: Option<PathBuf>,
         /// Region name to erase (requires --layout or uses FMAP scan)
-        #[arg(long, value_name = "NAME")]
+        #[usage(long, value_name = "NAME")]
         region: Option<String>,
     },
 
@@ -174,27 +188,27 @@ enum Cmd {
     /// Compare flash contents against a file (SHA-256 + diff report)
     Compare {
         /// Reference binary to compare flash against
-        #[arg(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE")]
         file: PathBuf,
-        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
-        offset: u32,
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        length: Option<u32>,
+        #[usage(long, default = "0")]
+        offset: HexU32,
+        #[usage(long, )]
+        length: Option<HexU32>,
         /// Layout file for region selection (flashrom format)
-        #[arg(long, value_name = "FILE")]
+        #[usage(long, value_name = "FILE")]
         layout: Option<PathBuf>,
         /// Region name to compare (requires --layout or uses FMAP scan)
-        #[arg(long, value_name = "NAME")]
+        #[usage(long, value_name = "NAME")]
         region: Option<String>,
     },
 
     /// Read FMAP region map from flash (or a local binary dump with --file)
     Fmap {
         /// Maximum bytes to scan for FMAP signature (hardware mode only)
-        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0x400000")]
-        scan_limit: u32,
+        #[usage(long, default = "0x400000")]
+        scan_limit: HexU32,
         /// Scan a local binary dump instead of reading hardware
-        #[arg(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE")]
         file: Option<PathBuf>,
     },
 
@@ -213,82 +227,82 @@ enum Cmd {
     /// Lock flash blocks (Winbond individual block lock, 0x36/0x7E)
     BlockLock {
         /// Lock all blocks globally (0x7E — volatile, resets on power cycle, ~45ms); mutually exclusive with --addr
-        #[arg(long)]
+        #[usage(long)]
         global: bool,
         /// Lock the sector/block containing this address (0x36 — volatile, resets on power cycle); mutually exclusive with --global
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        addr: Option<u32>,
+        #[usage(long, )]
+        addr: Option<HexU32>,
     },
 
     /// Unlock flash blocks (Winbond individual block unlock, 0x39/0x98)
     BlockUnlock {
         /// Unlock all blocks globally (0x98 — volatile, resets on power cycle, ~45ms); mutually exclusive with --addr
-        #[arg(long)]
+        #[usage(long)]
         global: bool,
         /// Unlock the sector/block containing this address (0x39 — volatile, resets on power cycle); mutually exclusive with --global
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        addr: Option<u32>,
+        #[usage(long, )]
+        addr: Option<HexU32>,
     },
 
     /// Parse a layout file and list regions (no hardware required)
     Regions {
-        #[arg(short, long)]
+        #[usage(short, long)]
         file: PathBuf,
     },
 
     /// Read OTP security registers (Winbond/GigaDevice, opcode 0x48)
     Otp {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: OtpCmd,
     },
 
     /// Parallel NOR flash (x16) on the xPort or Mach1 (EXPIO protocol)
     Pnor {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         action: PnorCmd,
     },
 }
 
-#[derive(clap::Subcommand)]
+#[derive(usage::Subcommands)]
 enum PnorCmd {
     /// Identify the attached parallel NOR chip (manufacturer + device ID)
     Detect,
     /// Read parallel NOR to a file
     Read {
-        #[arg(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE")]
         file: PathBuf,
-        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
-        offset: u32,
+        #[usage(long, default = "0")]
+        offset: HexU32,
         /// Bytes to read (default: full chip size if known)
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        length: Option<u32>,
+        #[usage(long, )]
+        length: Option<HexU32>,
     },
     /// Full-chip erase (AMD command set)
     Erase,
     /// Write a file to parallel NOR (chip must be erased first; --erase to do both)
     Write {
-        #[arg(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE")]
         file: PathBuf,
-        #[arg(long, value_parser = parse_hex_or_dec, default_value = "0")]
-        offset: u32,
+        #[usage(long, default = "0")]
+        offset: HexU32,
         /// Chip-erase before writing
-        #[arg(long)]
+        #[usage(long)]
         erase: bool,
         /// Read back and verify after writing
-        #[arg(long)]
+        #[usage(long)]
         verify: bool,
     },
 }
 
-#[derive(clap::Subcommand)]
+#[derive(usage::Subcommands)]
 enum OtpCmd {
     /// Dump security register(s) to stdout (hexdump) or a file
     Read {
         /// Register number to read (1-based); omit to read all
-        #[arg(long, value_parser = parse_hex_or_dec)]
-        reg: Option<u32>,
+        #[usage(long, )]
+        reg: Option<HexU32>,
         /// Write raw register bytes to this file instead of hexdumping
-        #[arg(short, long, value_name = "FILE")]
+        #[usage(short, long, value_name = "FILE")]
         file: Option<PathBuf>,
     },
     /// Show OTP lock bits LB1-3 (whether each register is permanently locked)
@@ -319,7 +333,7 @@ async fn main() -> Result<()> {
         v => bail!("unknown voltage '{v}' — use auto, 1v8, 3v3, or 5v"),
     };
 
-    let speed = SpiSpeed(cli.mhz);
+    let speed = SpiSpeed(cli.mhz.0);
 
     match &cli.cmd {
         Cmd::Check => cmd::cmd_check().await,
@@ -335,8 +349,8 @@ async fn main() -> Result<()> {
             cmd::cmd_read(cmd::ReadOpts {
                 vc, speed,
                 file: file.clone(),
-                offset: *offset,
-                length: *length,
+                offset: offset.0,
+                length: length.map(|l| l.0),
                 quad: *quad,
                 legacy_read: *legacy_read,
                 layout: layout.clone(),
@@ -348,7 +362,7 @@ async fn main() -> Result<()> {
             cmd::cmd_write(cmd::WriteOpts {
                 vc, speed,
                 file: file.clone(),
-                offset: *offset,
+                offset: offset.0,
                 erase: *erase,
                 verify: *verify,
                 smart: *smart,
@@ -358,40 +372,40 @@ async fn main() -> Result<()> {
         }
         Cmd::Sfdp => cmd::cmd_sfdp(vc, speed).await,
         Cmd::Erase { offset, length, layout, region } => {
-            cmd::cmd_erase(vc, speed, *offset, *length, layout.clone(), region.clone()).await
+            cmd::cmd_erase(vc, speed, offset.map(|o| o.0), length.map(|l| l.0), layout.clone(), region.clone()).await
         }
         Cmd::Compare { file, offset, length, layout, region } => {
             cmd::cmd_compare(cmd::CompareOpts {
                 vc, speed,
                 file: file.clone(),
-                offset: *offset,
-                length: *length,
+                offset: offset.0,
+                length: length.map(|l| l.0),
                 layout: layout.clone(),
                 region: region.clone(),
             }).await
         }
-        Cmd::Fmap { scan_limit, file } => cmd::cmd_fmap(vc, speed, *scan_limit, file.clone()).await,
+        Cmd::Fmap { scan_limit, file } => cmd::cmd_fmap(vc, speed, scan_limit.0, file.clone()).await,
         Cmd::Uid => cmd::cmd_uid(vc, speed).await,
         Cmd::Status => cmd::cmd_status(vc, speed).await,
         Cmd::Protect => cmd::cmd_protect(vc, speed).await,
         Cmd::Unprotect => cmd::cmd_unprotect(vc, speed).await,
-        Cmd::BlockLock { global, addr } => cmd::cmd_block_lock(vc, speed, *global, *addr).await,
-        Cmd::BlockUnlock { global, addr } => cmd::cmd_block_unlock(vc, speed, *global, *addr).await,
+        Cmd::BlockLock { global, addr } => cmd::cmd_block_lock(vc, speed, *global, addr.map(|a| a.0)).await,
+        Cmd::BlockUnlock { global, addr } => cmd::cmd_block_unlock(vc, speed, *global, addr.map(|a| a.0)).await,
         Cmd::Regions { file } => cmd::cmd_regions(file.clone()).await,
         Cmd::Otp { action } => match action {
             OtpCmd::Read { reg, file } => {
-                cmd::cmd_otp_read(vc, speed, reg.map(|r| r as u8), file.clone()).await
+                cmd::cmd_otp_read(vc, speed, reg.map(|r| r.0 as u8), file.clone()).await
             }
             OtpCmd::LockStatus => cmd::cmd_otp_lock_status(vc, speed).await,
         },
         Cmd::Pnor { action } => match action {
             PnorCmd::Detect => cmd::cmd_pnor_detect(vc).await,
             PnorCmd::Read { file, offset, length } => {
-                cmd::cmd_pnor_read(vc, file.clone(), *offset, *length).await
+                cmd::cmd_pnor_read(vc, file.clone(), offset.0, length.map(|l| l.0)).await
             }
             PnorCmd::Erase => cmd::cmd_pnor_erase(vc).await,
             PnorCmd::Write { file, offset, erase, verify } => {
-                cmd::cmd_pnor_write(vc, file.clone(), *offset, *erase, *verify).await
+                cmd::cmd_pnor_write(vc, file.clone(), offset.0, *erase, *verify).await
             }
         },
     }
