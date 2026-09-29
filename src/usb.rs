@@ -21,6 +21,12 @@ pub const PID_MACH1: u16 = 0x05E1;
 const CONNECT_ATTEMPTS: u32 = 6;
 const CONNECT_BACKOFF_MS: u64 = 150;
 
+/// VERSION budget when identifying a board; live firmware answers in a few ms.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+/// How long a port-reset board may take to re-enumerate, polled in steps.
+const RESET_SETTLE_MS: u64 = 3000;
+const RESET_POLL_MS: u64 = 100;
+
 /// How to pick a programmer when more than one is attached (`-p <value>`).
 #[derive(Clone, Debug)]
 pub enum DeviceSelector {
@@ -140,6 +146,7 @@ async fn open_device(di: &nusb::DeviceInfo, kind: Programmer) -> Result<UsbDevic
         iface.set_alt_setting(1).await?;
     }
     Ok(UsbDevice {
+        device,
         iface,
         kind,
         ctrl_delay,
@@ -152,12 +159,57 @@ async fn probe_kind(di: &nusb::DeviceInfo) -> Result<Programmer> {
     if let Some(k) = kind_from_pid(di.product_id()) {
         return Ok(k);
     }
-    let dev = open_device(di, Programmer::Classic).await?;
-    let (board, _) = dev
-        .version_raw()
+    let (_, board, _) = open_identified(di, Programmer::Classic)
         .await
         .context("cannot distinguish Classic vs xPort: firmware version read failed")?;
     Ok(kind_from_board_byte(board))
+}
+
+/// Open a board and read VERSION. A board whose firmware is wedged still
+/// enumerates but ignores vendor requests; it gets one USB port reset and a
+/// second try before giving up.
+async fn open_identified(
+    di: &nusb::DeviceInfo,
+    kind: Programmer,
+) -> Result<(UsbDevice, u8, String)> {
+    let path = usb_path(di);
+    let dev = open_device(di, kind).await?;
+    let err = match dev.version_probe(PROBE_TIMEOUT).await {
+        Ok((board, fw)) => return Ok((dev, board, fw)),
+        Err(e) => e,
+    };
+    tracing::warn!("{path}: no response to VERSION ({err:#}) — resetting USB port");
+    let device = dev.device.clone();
+    drop(dev);
+    // A reset that makes the board re-enumerate reports the old handle as
+    // disconnected; that is the reset working, not failing.
+    match device.reset().await {
+        Ok(()) => {}
+        Err(e) if e.kind() == nusb::ErrorKind::Disconnected => {}
+        Err(e) => return Err(e).with_context(|| format!("{path}: USB port reset failed")),
+    }
+    drop(device);
+
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(RESET_SETTLE_MS);
+    let cand = loop {
+        tokio::time::sleep(Duration::from_millis(RESET_POLL_MS)).await;
+        if let Some(c) = list_candidates()
+            .await?
+            .into_iter()
+            .find(|c| usb_path(&c.di) == path)
+        {
+            break c;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!("{path}: board did not come back after USB reset — replug it");
+        }
+    };
+    let dev = open_device(&cand.di, kind).await?;
+    let (board, fw) = dev
+        .version_probe(PROBE_TIMEOUT)
+        .await
+        .with_context(|| format!("{path}: firmware unresponsive even after USB reset — replug it"))?;
+    Ok((dev, board, fw))
 }
 
 async fn cand_matches(c: &Cand, sel: &DeviceSelector) -> bool {
@@ -261,14 +313,14 @@ pub async fn connect() -> Result<UsbDevice> {
         // Open and finalize the model (refine 0x05DE → Classic/xPort). A failed
         // version read here must error, never silently fall back to Classic.
         let attempt_result: Result<UsbDevice> = async {
-            let provisional = kind_from_pid(cand.pid).unwrap_or(Programmer::Classic);
-            let mut dev = open_device(&cand.di, provisional).await?;
-            if cand.pid == PID_CLASSIC {
-                let (board, _) = dev.version_raw().await.context(
-                    "cannot distinguish Classic vs xPort: firmware version read failed",
-                )?;
-                dev.kind = kind_from_board_byte(board);
+            if cand.pid != PID_CLASSIC {
+                let kind = kind_from_pid(cand.pid).unwrap_or(Programmer::Classic);
+                return open_device(&cand.di, kind).await;
             }
+            let (mut dev, board, _) = open_identified(&cand.di, Programmer::Classic)
+                .await
+                .context("cannot distinguish Classic vs xPort: firmware version read failed")?;
+            dev.kind = kind_from_board_byte(board);
             Ok(dev)
         }
         .await;
@@ -286,23 +338,30 @@ pub async fn connect() -> Result<UsbDevice> {
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("FlashcatUSB connect failed after retries")))
 }
 
-/// Enumerate attached programmers for the `devices` command: `(kind, path, serial, fw)`.
-pub async fn list_programmers() -> Result<Vec<(Programmer, String, Option<String>, String)>> {
+/// One attached board as the `devices` command reports it.
+pub struct ProgrammerInfo {
+    pub path: String,
+    pub serial: Option<String>,
+    /// `(kind, fw)`, or why the board could not be identified.
+    pub ident: Result<(Programmer, String)>,
+}
+
+/// Enumerate attached programmers for the `devices` command. A board that
+/// fails to identify is reported, not fatal to the listing.
+pub async fn list_programmers() -> Result<Vec<ProgrammerInfo>> {
     let cands = list_candidates().await?;
     let mut out = Vec::new();
     for c in &cands {
-        // Single open, single version read: derive the model from the version
-        // string rather than opening/reading twice (probe + read).
         let provisional = kind_from_pid(c.pid).unwrap_or(Programmer::Classic);
-        let dev = open_device(&c.di, provisional).await?;
-        let (board, fw) = dev.version_raw().await?;
-        let kind = kind_from_pid(c.pid).unwrap_or_else(|| kind_from_board_byte(board));
-        out.push((
-            kind,
-            usb_path(&c.di),
-            c.di.serial_number().map(|s| s.to_string()),
-            fw,
-        ));
+        let ident = open_identified(&c.di, provisional).await.map(|(_, board, fw)| {
+            let kind = kind_from_pid(c.pid).unwrap_or_else(|| kind_from_board_byte(board));
+            (kind, fw)
+        });
+        out.push(ProgrammerInfo {
+            path: usb_path(&c.di),
+            serial: c.di.serial_number().map(|s| s.to_string()),
+            ident,
+        });
     }
     Ok(out)
 }

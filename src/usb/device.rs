@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use nusb::{
     transfer::{Bulk, Buffer, ControlIn, ControlOut, ControlType, In, Out, Recipient},
-    Interface,
+    Device, Interface,
 };
 use std::time::Duration;
 use tracing::debug;
@@ -16,6 +16,7 @@ const EP_BULK_IN: u8 = 0x81;
 const EP_BULK_OUT: u8 = 0x02;
 
 pub struct UsbDevice {
+    pub device: Device,
     pub iface: Interface,
     pub kind: Programmer,
     /// Inter-command delay, sized by negotiated USB speed.
@@ -59,6 +60,16 @@ impl UsbDevice {
     }
 
     pub async fn ctrl_in(&self, req: UsbReq, data: u32, len: usize) -> Result<Vec<u8>> {
+        self.ctrl_in_timeout(req, data, len, TIMEOUT).await
+    }
+
+    async fn ctrl_in_timeout(
+        &self,
+        req: UsbReq,
+        data: u32,
+        len: usize,
+        timeout: Duration,
+    ) -> Result<Vec<u8>> {
         let buf = self
             .iface
             .control_in(
@@ -70,7 +81,7 @@ impl UsbDevice {
                     index: (data & 0xFFFF) as u16,
                     length: len as u16,
                 },
-                TIMEOUT,
+                timeout,
             )
             .await
             .with_context(|| format!("ctrl_in {req:?} failed"))?;
@@ -144,7 +155,13 @@ impl UsbDevice {
     /// Raw VERSION response: `(board_type_byte, "X.YZ")`.
     /// b[0]=board type, b[1..3]=ASCII version e.g. '1','1','9' → "1.19".
     pub async fn version_raw(&self) -> Result<(u8, String)> {
-        let b = self.ctrl_in(UsbReq::Version, 0, 4).await?;
+        self.version_probe(TIMEOUT).await
+    }
+
+    /// `version_raw` with a caller-chosen timeout, for probing boards that may
+    /// be unresponsive.
+    pub async fn version_probe(&self, timeout: Duration) -> Result<(u8, String)> {
+        let b = self.ctrl_in_timeout(UsbReq::Version, 0, 4, timeout).await?;
         if b.len() < 4 {
             bail!("short version response");
         }

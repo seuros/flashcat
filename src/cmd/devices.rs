@@ -9,15 +9,26 @@ pub async fn cmd_devices() -> Result<()> {
         return Ok(());
     }
     println!("{:<20} {:<8} {:<10} {:<14} {}", "MODEL", "-p", "PATH", "SERIAL", "FW");
-    for (kind, path, serial, fw) in list {
-        println!(
-            "{:<20} {:<8} {:<10} {:<14} {}",
-            kind.name(),
-            kind.token(),
-            path,
-            serial.as_deref().unwrap_or("-"),
-            fw
-        );
+    for p in list {
+        let serial = p.serial.as_deref().unwrap_or("-");
+        match p.ident {
+            Ok((kind, fw)) => println!(
+                "{:<20} {:<8} {:<10} {:<14} {}",
+                kind.name(),
+                kind.token(),
+                p.path,
+                serial,
+                fw
+            ),
+            Err(e) => println!(
+                "{:<20} {:<8} {:<10} {:<14} {}",
+                "(unresponsive)",
+                "?",
+                p.path,
+                serial,
+                format!("{e:#}")
+            ),
+        }
     }
     Ok(())
 }
