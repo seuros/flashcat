@@ -91,7 +91,7 @@ fn usb_path(di: &nusb::DeviceInfo) -> String {
         .map(|p| p.to_string())
         .collect::<Vec<_>>()
         .join(".");
-    format!("{}-{}", di.busnum(), ports)
+    format!("{}-{}", di.bus_id(), ports)
 }
 
 /// Resolve the model from PID alone; `None` for 0x05DE (needs a fw probe).
